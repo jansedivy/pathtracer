@@ -30,7 +30,7 @@ build_engine() {
   echo 'Building engine'
   echo '=================='
 
-  /usr/local/Cellar/llvm/3.6.2/bin/clang++ $engine_main -o build/$app_name/Contents/MacOS/$executable_name $shared_flags $engine_flags $optimalization $internal
+  clang++ $engine_main -o build/$app_name/Contents/MacOS/$executable_name $shared_flags $engine_flags $optimalization $internal
 }
 
 main() {
