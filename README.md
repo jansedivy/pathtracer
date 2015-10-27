@@ -2,7 +2,7 @@
 
 ![preview](https://cldup.com/dZLX9rG4Ou.png)
 
-# Features
+## Features
 
 - Rendering scene using multiple threads
 - Live preview window
