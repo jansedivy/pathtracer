@@ -45,21 +45,15 @@ struct Mesh {
   void *data = NULL;
 
   float *vertices = NULL;
-  u32 vertices_count = 0;
-
   float *normals = NULL;
-  u32 normals_count = 0;
-
   float *uv = NULL;
-  u32 uv_count = 0;
-
   int *indices = NULL;
-  u32 indices_count = 0;
-};
 
-struct Model {
-  Mesh mesh;
-  float radius;
+  u32 vertices_count = 0;
+  u32 normals_count = 0;
+  u32 uv_count = 0;
+  u32 indices_count = 0;
+
   AABB bounds;
 };
 
@@ -90,7 +84,7 @@ void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indice
   mesh->uv_count = uv_count;
 }
 
-void load_model_work(std::vector<Model *> *models) {
+void load_model_work(std::vector<Mesh *> *models) {
   Assimp::Importer importer;
 
   const aiScene* scene = importer.ReadFile("model.obj", aiProcess_GenNormals |
@@ -129,16 +123,25 @@ void load_model_work(std::vector<Model *> *models) {
 
       u32 vertices_index = 0;
       u32 normals_index = 0;
-      u32 uv_index = 0;
       u32 indices_index = 0;
 
-      Mesh mesh;
-      allocate_mesh(&mesh, vertices_count, normals_count, indices_count, uv_count);
+      Mesh *mesh = (Mesh *)malloc(sizeof(Mesh));
+      mesh->data = NULL;
+      mesh->vertices = NULL;
+      mesh->normals = NULL;
+      mesh->uv = NULL;
+      mesh->indices = NULL;
+      mesh->vertices_count = 0;
+      mesh->normals_count = 0;
+      mesh->uv_count = 0;
+      mesh->indices_count = 0;
+
+      allocate_mesh(mesh, vertices_count, normals_count, indices_count, uv_count);
 
       for (u32 l=0; l<mesh_data->mNumVertices; l++) {
-        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].x;
-        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].y;
-        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].z;
+        mesh->vertices[vertices_index++] = mesh_data->mVertices[l].x;
+        mesh->vertices[vertices_index++] = mesh_data->mVertices[l].y;
+        mesh->vertices[vertices_index++] = mesh_data->mVertices[l].z;
 
 #define FIND_MIN(a, b) if ((a) < (b)) { (b) = (a); }
 #define FIND_MAX(a, b) if ((a) > (b)) { (b) = (a); }
@@ -155,29 +158,21 @@ void load_model_work(std::vector<Model *> *models) {
           max_distance = new_distance;
         }
 
-        mesh.normals[normals_index++] = mesh_data->mNormals[l].x;
-        mesh.normals[normals_index++] = mesh_data->mNormals[l].y;
-        mesh.normals[normals_index++] = mesh_data->mNormals[l].z;
-
-        /* if (mesh_data->mTextureCoords[0]) { */
-        /*   mesh.uv[uv_index++] = mesh_data->mTextureCoords[0][l].x; */
-        /*   mesh.uv[uv_index++] = mesh_data->mTextureCoords[0][l].y; */
-        /* } */
+        mesh->normals[normals_index++] = mesh_data->mNormals[l].x;
+        mesh->normals[normals_index++] = mesh_data->mNormals[l].y;
+        mesh->normals[normals_index++] = mesh_data->mNormals[l].z;
       }
 
       for (u32 l=0; l<mesh_data->mNumFaces; l++) {
         aiFace face = mesh_data->mFaces[l];
 
         for (u32 j=0; j<face.mNumIndices; j++) {
-          mesh.indices[indices_index++] = face.mIndices[j];
+          mesh->indices[indices_index++] = face.mIndices[j];
         }
       }
 
-      Model *model = (Model *)malloc(sizeof(Model));
-      model->mesh = mesh;
-      model->radius = max_distance;
-      model->bounds = bounds;
-      models->push_back(model);
+      mesh->bounds = bounds;
+      models->push_back(mesh);
     }
   }
 }
@@ -286,6 +281,12 @@ struct HitResult {
   double distance;
 };
 
+enum ObjectType {
+  SphereType,
+  PlaneType,
+  ModelType
+};
+
 struct Sphere {
   double radius;
   dvec3 position;
@@ -301,6 +302,23 @@ struct Plane {
   dvec3 color;
   Material material;
 };
+
+struct ModelObject {
+  Mesh *model;
+  dvec3 position;
+  dvec3 color;
+  dvec3 emission;
+  Material material;
+};
+
+struct SceneObject {
+  ObjectType type;
+
+  Sphere sphere;
+  Plane plane;
+  ModelObject model;
+};
+
 
 HitResult intersect_plane(const Plane &plane, const Ray &r) {
   HitResult result;
@@ -368,20 +386,6 @@ HitResult intersect_sphere(const Sphere &sphere, const Ray &r) {
   return result;
 }
 
-enum ObjectType {
-  SphereType,
-  PlaneType,
-  ModelType
-};
-
-struct ModelObject {
-  Model *model;
-  dvec3 position;
-  dvec3 color;
-  dvec3 emission;
-  Material material;
-};
-
 bool aabb_intersection(AABB b, Ray r) {
   dvec3 dirfrac;
   dirfrac.x = 1.0 / r.direction.x;
@@ -436,29 +440,29 @@ HitResult intersect_model(const ModelObject &model, const Ray &r) {
   dvec3 start = dvec3(res * dvec4(r.origin, 1.0));
   dvec3 direction = dvec3(res * dvec4(r.direction, 0.0));
 
-  Mesh mesh = model.model->mesh;
+  Mesh *mesh = model.model;
 
   double distance = DBL_MAX;
 
   dvec3 result_position;
 
   u32 index;
-  for (u32 i=0; i<mesh.indices_count; i += 3) {
-    int indices_a = mesh.indices[i + 0] * 3;
-    int indices_b = mesh.indices[i + 1] * 3;
-    int indices_c = mesh.indices[i + 2] * 3;
+  for (u32 i=0; i<mesh->indices_count; i += 3) {
+    int indices_a = mesh->indices[i + 0] * 3;
+    int indices_b = mesh->indices[i + 1] * 3;
+    int indices_c = mesh->indices[i + 2] * 3;
 
-    dvec3 a = dvec3(mesh.vertices[indices_a + 0],
-                             mesh.vertices[indices_a + 1],
-                             mesh.vertices[indices_a + 2]);
+    dvec3 a = dvec3(mesh->vertices[indices_a + 0],
+                    mesh->vertices[indices_a + 1],
+                    mesh->vertices[indices_a + 2]);
 
-    dvec3 b = dvec3(mesh.vertices[indices_b + 0],
-                             mesh.vertices[indices_b + 1],
-                             mesh.vertices[indices_b + 2]);
+    dvec3 b = dvec3(mesh->vertices[indices_b + 0],
+                    mesh->vertices[indices_b + 1],
+                    mesh->vertices[indices_b + 2]);
 
-    dvec3 c = dvec3(mesh.vertices[indices_c + 0],
-                             mesh.vertices[indices_c + 1],
-                             mesh.vertices[indices_c + 2]);
+    dvec3 c = dvec3(mesh->vertices[indices_c + 0],
+                    mesh->vertices[indices_c + 1],
+                    mesh->vertices[indices_c + 2]);
 
     if (glm::intersectRayTriangle(start, direction, a, b, c, result_position)) {
       if (result_position.z < distance) {
@@ -470,21 +474,21 @@ HitResult intersect_model(const ModelObject &model, const Ray &r) {
   }
 
   if (result.hit) {
-    int indices_a = mesh.indices[index + 0] * 3;
-    int indices_b = mesh.indices[index + 1] * 3;
-    int indices_c = mesh.indices[index + 2] * 3;
+    int indices_a = mesh->indices[index + 0] * 3;
+    int indices_b = mesh->indices[index + 1] * 3;
+    int indices_c = mesh->indices[index + 2] * 3;
 
-    dvec3 normal_a = dvec3(mesh.normals[indices_a + 0],
-        mesh.normals[indices_a + 1],
-        mesh.normals[indices_a + 2]);
+    dvec3 normal_a = dvec3(mesh->normals[indices_a + 0],
+                           mesh->normals[indices_a + 1],
+                           mesh->normals[indices_a + 2]);
 
-    dvec3 normal_b = dvec3(mesh.normals[indices_b + 0],
-        mesh.normals[indices_b + 1],
-        mesh.normals[indices_b + 2]);
+    dvec3 normal_b = dvec3(mesh->normals[indices_b + 0],
+                           mesh->normals[indices_b + 1],
+                           mesh->normals[indices_b + 2]);
 
-    dvec3 normal_c = dvec3(mesh.normals[indices_c + 0],
-        mesh.normals[indices_c + 1],
-        mesh.normals[indices_c + 2]);
+    dvec3 normal_c = dvec3(mesh->normals[indices_c + 0],
+                           mesh->normals[indices_c + 1],
+                           mesh->normals[indices_c + 2]);
     result.position = r.origin + r.direction * distance;
     result.normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0);
     result.color = model.color;
@@ -496,46 +500,35 @@ HitResult intersect_model(const ModelObject &model, const Ray &r) {
   return result;
 }
 
-struct SceneObject {
-  ObjectType type;
-
-  Sphere sphere;
-  Plane plane;
-  ModelObject model;
+struct World {
+  std::vector<Sphere> spheres;
+  std::vector<Plane> planes;
+  std::vector<ModelObject> models;
 };
 
-std::vector<SceneObject> objects;
-
-inline int toInt(double x) {
-  return int(pow(glm::clamp(x, 0.0, 1.0), 1 / 2.2) * 255 + .5);
-}
-
-inline HitResult intersect_all(const Ray &r) {
+inline HitResult intersect_all(World *world, const Ray &r) {
   HitResult closest;
   closest.hit = false;
   double distance = DBL_MAX;
 
-  for (auto it = objects.begin(); it != objects.end(); it++) {
-    HitResult hit;
-    hit.hit = false;
-    switch(it->type) {
-      case SphereType:
-      {
-        Sphere sphere = it->sphere;
-        hit = intersect_sphere(sphere, r);
-      } break;
-      case PlaneType:
-      {
-        Plane plane = it->plane;
-        hit = intersect_plane(plane, r);
-      } break;
-      case ModelType:
-      {
-        ModelObject model = it->model;
-        hit = intersect_model(model, r);
-      } break;
+  for (auto it = world->spheres.begin(); it != world->spheres.end(); it++) {
+    HitResult hit = intersect_sphere(*it, r);
+    if (hit.hit && hit.distance < distance) {
+      closest = hit;
+      distance = hit.distance;
     }
+  }
 
+  for (auto it = world->planes.begin(); it != world->planes.end(); it++) {
+    HitResult hit = intersect_plane(*it, r);
+    if (hit.hit && hit.distance < distance) {
+      closest = hit;
+      distance = hit.distance;
+    }
+  }
+
+  for (auto it = world->models.begin(); it != world->models.end(); it++) {
+    HitResult hit = intersect_model(*it, r);
     if (hit.hit && hit.distance < distance) {
       closest = hit;
       distance = hit.distance;
@@ -549,14 +542,14 @@ dvec3 reflect(const dvec3 &value, const dvec3 &normal) {
   return value - normal * 2.0 * glm::dot(normal, value);
 }
 
-dvec3 radiance(Ray ray, int max_bounces) {
+dvec3 radiance(World *world, Ray ray, int max_bounces) {
   int depth_iteration = 0;
 
   dvec3 color(0.0, 0.0, 0.0);
   dvec3 reflectance(1.0, 1.0, 1.0);
 
   while (true) {
-    HitResult hit = intersect_all(ray);
+    HitResult hit = intersect_all(world, ray);
     if (!hit.hit) {
       return color;
     }
@@ -610,10 +603,9 @@ dvec3 radiance(Ray ray, int max_bounces) {
       Ray reflRay;
       reflRay.origin = hit_position;
       reflRay.direction = reflect(ray.direction, n);
-      bool into = glm::dot(n, normal) > 0.0;                // Ray from outside going in?
+      bool into = glm::dot(n, normal) > 0.0;
       double nc=1, nt=1.5, nnt=into?nc/nt:nt/nc, ddn=glm::dot(ray.direction, normal), cos2t;
-      if ((cos2t=1-nnt*nnt*(1-ddn*ddn))<0){    // Total internal reflection
-        //return obj.e + f.mult(radiance(reflRay,depth,Xi));
+      if ((cos2t=1-nnt*nnt*(1-ddn*ddn))<0){
         ray = reflRay;
         continue;
       }
@@ -629,9 +621,6 @@ dvec3 radiance(Ray ray, int max_bounces) {
       double P=.25+.5*Re;
       double RP=Re/P;
       double TP=Tr/(1-P);
-      // return obj.e + f.mult(erand48(Xi)<P ?
-      //                       radiance(reflRay,    depth,Xi)*RP:
-      //                       radiance(Ray(x,tdir),depth,Xi)*TP);
 
       if (random_double() < P) {
         reflectance = reflectance*RP;
@@ -681,14 +670,17 @@ struct RenderData {
   int minY;
   int maxX;
   int maxY;
+
   int samps;
   int max_bounces;
+
   int index_x;
   int index_y;
-  float progress;
+
   Camera *camera;
   dvec3 *colors;
   RenderTileState::RenderTileState state;
+  World *world;
 };
 
 u64 get_performance_counter() {
@@ -699,18 +691,20 @@ u64 get_performance_frequency() {
   return SDL_GetPerformanceFrequency();
 }
 
+inline int to_int(double x) {
+  return int(pow(glm::clamp(x, 0.0, 1.0), 1 / 2.2) * 255 + .5);
+}
+
 void export_image(u8 *pixels, dvec3 *colors, int width, int height) {
   for (int i=0; i<width*height; i++) {
-    pixels[i * 4 + 0] = toInt(colors[i].x);
-    pixels[i * 4 + 1] = toInt(colors[i].y);
-    pixels[i * 4 + 2] = toInt(colors[i].z);
+    pixels[i * 4 + 0] = to_int(colors[i].x);
+    pixels[i * 4 + 1] = to_int(colors[i].y);
+    pixels[i * 4 + 2] = to_int(colors[i].z);
     pixels[i * 4 + 3] = 255;
   }
 
   stbi_write_png("../../../image.png", width, height, 4, pixels, width * 4);
 }
-
-u8 *pixels;
 
 void render(void *data) {
   RenderData *work = (RenderData *)data;
@@ -724,11 +718,11 @@ void render(void *data) {
   dvec3 *colors = work->colors;
   int width = camera->width;
   int height = camera->height;
+  World *world = work->world;
 
   work->state = RenderTileState::RENDERING;
 
   for (int y=minY; y<maxY; y++) {
-    work->progress = (float)(y - minY) / (float)(maxY - minY);
     for (int x=minX; x<maxX; x++) {
       int i = (height - y - 1) * width + x;
       dvec3 pixel_color = dvec3(0.0);
@@ -740,7 +734,7 @@ void render(void *data) {
           Ray ray = get_camera_ray(camera, (sx + 0.5 + dx) / 2.0 + x - 0.5, (sy + 0.5 + dy) / 2.0 + y - 0.5);
 
           for (int s=0; s<samps; s++) {
-            dvec3 ray_color = radiance(ray, max_bounces);
+            dvec3 ray_color = radiance(world, ray, max_bounces);
             pixel_color = pixel_color + ray_color * (1.0 / samps);
           }
         }
@@ -754,26 +748,23 @@ void render(void *data) {
   work->state = RenderTileState::DONE;
 }
 
-SceneObject create_plane(dvec3 position, dvec3 normal, dvec3 color, dvec3 emission, Material material) {
-  SceneObject plane;
-  plane.type = PlaneType;
-  plane.plane.position = position;
-  plane.plane.normal = normal;
-  plane.plane.color = color;
-  plane.plane.emission = emission;
-  plane.plane.material = material;
+Plane create_plane(dvec3 position, dvec3 normal, dvec3 color, dvec3 emission, Material material) {
+  Plane plane;
+  plane.position = position;
+  plane.normal = normal;
+  plane.color = color;
+  plane.emission = emission;
+  plane.material = material;
   return plane;
 }
 
-SceneObject create_model(Model *model, dvec3 position, dvec3 color, dvec3 emission, Material material) {
-  SceneObject model_object;
-  model_object.type = ModelType;
-  model_object.model.model = model;
-
-  model_object.model.position = position;
-  model_object.model.color = color;
-  model_object.model.emission = emission;
-  model_object.model.material = material;
+ModelObject create_model(Mesh *model, dvec3 position, dvec3 color, dvec3 emission, Material material) {
+  ModelObject model_object;
+  model_object.model = model;
+  model_object.position = position;
+  model_object.color = color;
+  model_object.emission = emission;
+  model_object.material = material;
   return model_object;
 }
 
@@ -784,8 +775,7 @@ bool render_tile_sort(RenderData &a, RenderData &b) {
 }
 
 int main(int argc, char *argv[]) {
-  printf("Start\n");
-  /* std::srand(std::time(NULL)); */
+  std::srand(std::time(NULL));
 #if 0
   int width = 2880/2;
   int height = 1800/2;
@@ -795,7 +785,7 @@ int main(int argc, char *argv[]) {
   int width = 512;
   int height = width * (3.0 / 4.0);
   int max_bounces = 5;
-  int samps = 1000;
+  int samps = 10;
 #endif
   float aspect = (float)height / (float)width;
   u32 tile_start_x = 0;
@@ -815,42 +805,28 @@ int main(int argc, char *argv[]) {
     SDL_CreateThread(thread_function, "main_worker_thread", &main_queue);
   }
 
-  pixels = (u8 *)malloc(width * height * 4);
+  u8 *pixels = (u8 *)malloc(width * height * 4);
 
-  std::vector<Model *>models;
+  std::vector<Mesh *>models;
 
-  /* load_model_work(&models); */
+  load_model_work(&models);
 
   dvec3 *colors = new dvec3[width * height];
 
-  Sphere spheres[] = {
-    { 40, dvec3(50, 115, 60),       dvec3(10),dvec3(1,1,1), DIFF },
-    /* { 16.5, dvec3(27,16.5,57),       dvec3(),dvec3(1,1,1), DIFF }, */
-    { 16.5, dvec3(73,16.5,55),       dvec3(),dvec3(1,1,1)*0.999, REFL }, //Glas
-  };
+  World world;
 
-  for (u32 i=0; i<array_count(spheres); i++) {
-    SceneObject object;
-    object.type = SphereType;
-    object.sphere = spheres[i];
-    objects.push_back(object);
-  }
+  world.spheres.push_back({ 40, dvec3(50, 115, 60), dvec3(10),dvec3(1,1,1), DIFF });
+  world.spheres.push_back({ 16.5, dvec3(73,16.5,55), dvec3(),dvec3(1,1,1)*0.999, REFL });
 
-  SceneObject planes[] = {
-    create_plane(dvec3(0, 0, 0), dvec3(0.0, 0.0, 1.0), dvec3(0.75), dvec3(0.0), DIFF),
-    create_plane(dvec3(5, 0, 0), dvec3(1.0, 0.0, 0.0), dvec3(39.0 / 255.0, 39.0 / 255.0, 214.0 / 255.0), dvec3(0.0), DIFF),
-    create_plane(dvec3(95, 0, 0), dvec3(1.0, 0.0, 0.0), dvec3(214.0 / 255.0, 204.0 / 255.0, 39.0 / 214.0), dvec3(0.0), DIFF),
-    create_plane(dvec3(0, 80, 0), dvec3(0.0, 1.0, 0.0), dvec3(0.75), dvec3(), DIFF),
-    create_plane(dvec3(0, 0, 0), dvec3(0.0, 1.0, 0.0), dvec3(0.75), dvec3(0.0), DIFF),
-    create_plane(dvec3(0, 0, 160), dvec3(0.0, 0.0, 1.0), dvec3(0.75), dvec3(0.0), DIFF),
-  };
-
-  for (u32 i=0; i<array_count(planes); i++) {
-    objects.push_back(planes[i]);
-  }
+  world.planes.push_back(create_plane(dvec3(0, 0, 0), dvec3(0.0, 0.0, 1.0), dvec3(0.75), dvec3(0.0), DIFF));
+  world.planes.push_back(create_plane(dvec3(5, 0, 0), dvec3(1.0, 0.0, 0.0), dvec3(39.0 / 255.0, 39.0 / 255.0, 214.0 / 255.0), dvec3(0.0), DIFF));
+  world.planes.push_back(create_plane(dvec3(95, 0, 0), dvec3(1.0, 0.0, 0.0), dvec3(214.0 / 255.0, 204.0 / 255.0, 39.0 / 214.0), dvec3(0.0), DIFF));
+  world.planes.push_back(create_plane(dvec3(0, 80, 0), dvec3(0.0, 1.0, 0.0), dvec3(0.75), dvec3(), DIFF));
+  world.planes.push_back(create_plane(dvec3(0, 0, 0), dvec3(0.0, 1.0, 0.0), dvec3(0.75), dvec3(0.0), DIFF));
+  world.planes.push_back(create_plane(dvec3(0, 0, 160), dvec3(0.0, 0.0, 1.0), dvec3(0.75), dvec3(0.0), DIFF));
 
   for (auto it = models.begin(); it != models.end(); it++) {
-    objects.push_back(create_model(*it, dvec3(35, 0, 50), dvec3(193.0 / 255, 80.0 / 255.0, 27.0 / 255), dvec3(0.0), DIFF));
+    world.models.push_back(create_model(*it, dvec3(35, 0, 50), dvec3(193.0 / 255, 80.0 / 255.0, 27.0 / 255), dvec3(0.0), DIFF));
   }
 
   Camera camera;
@@ -885,7 +861,7 @@ int main(int argc, char *argv[]) {
       item->camera = &camera;
       item->colors = colors;
       item->state = RenderTileState::WAITING;
-      item->progress = 0.0;
+      item->world = &world;
 
       if (x == (tile_count_x - 1)) {
         item->maxX = width;
@@ -941,9 +917,9 @@ int main(int argc, char *argv[]) {
     }
 
     for (int i=0; i<width*height; i++) {
-      screen[i * 4 + 0] = toInt(colors[i].z);
-      screen[i * 4 + 1] = toInt(colors[i].y);
-      screen[i * 4 + 2] = toInt(colors[i].x);
+      screen[i * 4 + 0] = to_int(colors[i].z);
+      screen[i * 4 + 1] = to_int(colors[i].y);
+      screen[i * 4 + 2] = to_int(colors[i].x);
       screen[i * 4 + 3] = 255;
     }
 
@@ -953,12 +929,8 @@ int main(int argc, char *argv[]) {
 
     SDL_SetRenderDrawColor(renderer, 228, 214, 42, 255);
 
-    float progress = 0.0;
-
     for (u32 i=0; i<array_count(data); i++) {
       RenderData *item = data + i;
-
-      progress += item->progress;
 
       int tile_width = (item->maxX - item->minX) * ((float)window_width / (float)width);
       int tile_height = (item->maxY - item->minY) * ((float)window_height / (float)height);
@@ -972,15 +944,8 @@ int main(int argc, char *argv[]) {
         SDL_RenderDrawRect(renderer, &rect);
       }
     }
-    progress /= (float)array_count(data);
-    printf("%f\n", progress);
-
-    u64 progress_diff = get_performance_counter() - start;
-    float ms_to_finish = ((float)(progress_diff) / (float)get_performance_frequency() * 1000.0f) / progress;
 
     if (!image_exported && main_queue.completion_goal == main_queue.completion_count) {
-      float time = (float)(get_performance_counter() - start)/(float)get_performance_frequency() * 1000.0f;
-      printf("%.3fms\n", time);
       export_image(pixels, colors, width, height);
       image_exported = true;
     }
