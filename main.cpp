@@ -84,10 +84,10 @@ void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indice
   mesh->uv_count = uv_count;
 }
 
-void load_model_work(std::vector<Mesh *> *models) {
+void load_model_work(std::vector<Mesh> *models, const char *path) {
   Assimp::Importer importer;
 
-  const aiScene* scene = importer.ReadFile("model.obj", aiProcess_GenNormals |
+  const aiScene* scene = importer.ReadFile(path, aiProcess_GenNormals |
       aiProcess_CalcTangentSpace |
       aiProcess_Triangulate |
       aiProcess_JoinIdenticalVertices |
@@ -125,23 +125,13 @@ void load_model_work(std::vector<Mesh *> *models) {
       u32 normals_index = 0;
       u32 indices_index = 0;
 
-      Mesh *mesh = (Mesh *)malloc(sizeof(Mesh));
-      mesh->data = NULL;
-      mesh->vertices = NULL;
-      mesh->normals = NULL;
-      mesh->uv = NULL;
-      mesh->indices = NULL;
-      mesh->vertices_count = 0;
-      mesh->normals_count = 0;
-      mesh->uv_count = 0;
-      mesh->indices_count = 0;
-
-      allocate_mesh(mesh, vertices_count, normals_count, indices_count, uv_count);
+      Mesh mesh;
+      allocate_mesh(&mesh, vertices_count, normals_count, indices_count, uv_count);
 
       for (u32 l=0; l<mesh_data->mNumVertices; l++) {
-        mesh->vertices[vertices_index++] = mesh_data->mVertices[l].x;
-        mesh->vertices[vertices_index++] = mesh_data->mVertices[l].y;
-        mesh->vertices[vertices_index++] = mesh_data->mVertices[l].z;
+        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].x;
+        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].y;
+        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].z;
 
 #define FIND_MIN(a, b) if ((a) < (b)) { (b) = (a); }
 #define FIND_MAX(a, b) if ((a) > (b)) { (b) = (a); }
@@ -158,20 +148,20 @@ void load_model_work(std::vector<Mesh *> *models) {
           max_distance = new_distance;
         }
 
-        mesh->normals[normals_index++] = mesh_data->mNormals[l].x;
-        mesh->normals[normals_index++] = mesh_data->mNormals[l].y;
-        mesh->normals[normals_index++] = mesh_data->mNormals[l].z;
+        mesh.normals[normals_index++] = mesh_data->mNormals[l].x;
+        mesh.normals[normals_index++] = mesh_data->mNormals[l].y;
+        mesh.normals[normals_index++] = mesh_data->mNormals[l].z;
       }
 
       for (u32 l=0; l<mesh_data->mNumFaces; l++) {
         aiFace face = mesh_data->mFaces[l];
 
         for (u32 j=0; j<face.mNumIndices; j++) {
-          mesh->indices[indices_index++] = face.mIndices[j];
+          mesh.indices[indices_index++] = face.mIndices[j];
         }
       }
 
-      mesh->bounds = bounds;
+      mesh.bounds = bounds;
       models->push_back(mesh);
     }
   }
@@ -320,70 +310,66 @@ struct SceneObject {
 };
 
 
-HitResult intersect_plane(const Plane &plane, const Ray &r) {
-  HitResult result;
-
-  float denom = glm::dot(plane.normal, r.direction);
+void intersect_plane(HitResult *result, Plane *plane, const Ray &r) {
+  float denom = glm::dot(plane->normal, r.direction);
   if (fabs(denom) > 0.0) {
-    double t = glm::dot(plane.position - r.origin, plane.normal) / denom;
+    double t = glm::dot(plane->position - r.origin, plane->normal) / denom;
     if (t >= 0.001) {
-      result.hit = true;
-      result.position = r.origin + r.direction * t;
-      result.normal = plane.normal;
-      result.color = plane.color;
-      result.emission = plane.emission;
-      result.material = plane.material;
-      result.distance = t;
-      return result;
+      result->hit = true;
+      result->position = r.origin + r.direction * t;
+      result->normal = plane->normal;
+      result->color = plane->color;
+      result->emission = plane->emission;
+      result->material = plane->material;
+      result->distance = t;
+      return;
     }
   }
 
-  result.hit = false;
-  return result;
+  result->hit = false;
+  return;
 }
 
-HitResult intersect_sphere(const Sphere &sphere, const Ray &r) {
-  HitResult result;
-
-  dvec3 op = sphere.position - r.origin;
+void intersect_sphere(HitResult *result, Sphere *sphere, const Ray &r) {
+  dvec3 op = sphere->position - r.origin;
   double t;
   double eps = 1e-4;
   double b = glm::dot(op, r.direction);
-  double det = b * b - glm::dot(op, op) + sphere.radius * sphere.radius;
+  double det = b * b - glm::dot(op, op) + sphere->radius * sphere->radius;
 
   if (det < 0) {
-    result.hit = false;
-    return result;
+    result->hit = false;
+    return;
   } else {
     det = sqrt(det);
   }
 
   t = (t = b - det);
   if (t > eps) {
-    result.hit = true;
-    result.position = r.origin + r.direction * t;
-    result.normal = glm::normalize(result.position - sphere.position);
-    result.color = sphere.color;
-    result.emission = sphere.emission;
-    result.material = sphere.material;
-    result.distance = t;
-    return result;
+    result->hit = true;
+    result->position = r.origin + r.direction * t;
+    result->normal = glm::normalize(result->position - sphere->position);
+    result->color = sphere->color;
+    result->emission = sphere->emission;
+    result->material = sphere->material;
+    result->distance = t;
+    return;
   }
 
   t = b + det;
   if (t > eps) {
-    result.hit = true;
-    result.position = r.origin + r.direction * t;
-    result.normal = glm::normalize(result.position - sphere.position);
-    result.color = sphere.color;
-    result.emission = sphere.emission;
-    result.material = sphere.material;
-    result.distance = t;
-    return result;
+    result->hit = true;
+    result->position = r.origin + r.direction * t;
+    result->normal = glm::normalize(result->position - sphere->position);
+    result->color = sphere->color;
+    result->emission = sphere->emission;
+    result->material = sphere->material;
+    result->distance = t;
+    return;
   }
 
-  result.hit = false;
-  return result;
+  result->hit = false;
+  return;
 }
 
 bool aabb_intersection(AABB b, Ray r) {
@@ -417,30 +403,28 @@ bool aabb_intersection(AABB b, Ray r) {
   return true;
 }
 
-HitResult intersect_model(const ModelObject &model, const Ray &r) {
-  HitResult result;
-  result.hit = false;
-
+void intersect_model(HitResult *result, ModelObject *model, const Ray &r) {
+  bool hit = false;
   double scale = 12.0;
 
   dmat4 model_view;
-  model_view = glm::translate(model_view, model.position);
+  model_view = glm::translate(model_view, model->position);
   model_view = glm::scale(model_view, dvec3(scale));
   dmat4 res = glm::inverse(model_view);
 
   AABB transformed_bounds;
-  transformed_bounds.min = dvec3(model_view * dvec4(model.model->bounds.min, 1.0));
-  transformed_bounds.max = dvec3(model_view * dvec4(model.model->bounds.max, 1.0));
+  transformed_bounds.min = dvec3(model_view * dvec4(model->model->bounds.min, 1.0));
+  transformed_bounds.max = dvec3(model_view * dvec4(model->model->bounds.max, 1.0));
 
   if (!aabb_intersection(transformed_bounds, r)) {
-    result.hit = false;
-    return result;
+    result->hit = false;
+    return;
   }
 
   dvec3 start = dvec3(res * dvec4(r.origin, 1.0));
   dvec3 direction = dvec3(res * dvec4(r.direction, 0.0));
 
-  Mesh *mesh = model.model;
+  Mesh *mesh = model->model;
 
   double distance = DBL_MAX;
 
@@ -468,12 +452,12 @@ HitResult intersect_model(const ModelObject &model, const Ray &r) {
       if (result_position.z < distance) {
         index = i;
         distance = result_position.z;
-        result.hit = true;
+        hit = true;
       }
     }
   }
 
-  if (result.hit) {
+  if (hit) {
     int indices_a = mesh->indices[index + 0] * 3;
     int indices_b = mesh->indices[index + 1] * 3;
     int indices_c = mesh->indices[index + 2] * 3;
@@ -489,15 +473,14 @@ HitResult intersect_model(const ModelObject &model, const Ray &r) {
     dvec3 normal_c = dvec3(mesh->normals[indices_c + 0],
                            mesh->normals[indices_c + 1],
                            mesh->normals[indices_c + 2]);
-    result.position = r.origin + r.direction * distance;
-    result.normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0);
-    result.color = model.color;
-    result.emission = model.emission;
-    result.material = model.material;
-    result.distance = distance;
+    result->hit = true;
+    result->position = r.origin + r.direction * distance;
+    result->normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0);
+    result->color = model->color;
+    result->emission = model->emission;
+    result->material = model->material;
+    result->distance = distance;
   }
-
-  return result;
 }
 
 struct World {
@@ -506,36 +489,34 @@ struct World {
   std::vector<ModelObject> models;
 };
 
-inline HitResult intersect_all(World *world, const Ray &r) {
-  HitResult closest;
-  closest.hit = false;
+void intersect_all(HitResult *closest, World *world, const Ray &r) {
+  HitResult hit;
+  closest->hit = false;
   double distance = DBL_MAX;
 
   for (auto it = world->spheres.begin(); it != world->spheres.end(); it++) {
-    HitResult hit = intersect_sphere(*it, r);
+    intersect_sphere(&hit, &(*it), r);
     if (hit.hit && hit.distance < distance) {
-      closest = hit;
+      *closest = hit;
       distance = hit.distance;
     }
   }
 
   for (auto it = world->planes.begin(); it != world->planes.end(); it++) {
-    HitResult hit = intersect_plane(*it, r);
+    intersect_plane(&hit, &(*it), r);
     if (hit.hit && hit.distance < distance) {
-      closest = hit;
+      *closest = hit;
       distance = hit.distance;
     }
   }
 
   for (auto it = world->models.begin(); it != world->models.end(); it++) {
-    HitResult hit = intersect_model(*it, r);
+    intersect_model(&hit, &(*it), r);
     if (hit.hit && hit.distance < distance) {
-      closest = hit;
+      *closest = hit;
       distance = hit.distance;
     }
   }
-
-  return closest;
 }
 
 dvec3 reflect(const dvec3 &value, const dvec3 &normal) {
@@ -548,8 +529,9 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
   dvec3 color(0.0, 0.0, 0.0);
   dvec3 reflectance(1.0, 1.0, 1.0);
 
+  HitResult hit;
   while (true) {
-    HitResult hit = intersect_all(world, ray);
+    intersect_all(&hit, world, ray);
     if (!hit.hit) {
       return color;
     }
@@ -784,7 +766,7 @@ int main(int argc, char *argv[]) {
 #else
   int width = 512;
   int height = width * (3.0 / 4.0);
-  int max_bounces = 5;
+  int max_bounces = 1;
   int samps = 10;
 #endif
   float aspect = (float)height / (float)width;
@@ -807,9 +789,9 @@ int main(int argc, char *argv[]) {
 
   u8 *pixels = (u8 *)malloc(width * height * 4);
 
-  std::vector<Mesh *>models;
+  std::vector<Mesh>models;
 
-  load_model_work(&models);
+  load_model_work(&models, "model.obj");
 
   dvec3 *colors = new dvec3[width * height];
 
@@ -826,7 +808,7 @@ int main(int argc, char *argv[]) {
   world.planes.push_back(create_plane(dvec3(0, 0, 160), dvec3(0.0, 0.0, 1.0), dvec3(0.75), dvec3(0.0), DIFF));
 
   for (auto it = models.begin(); it != models.end(); it++) {
-    world.models.push_back(create_model(*it, dvec3(35, 0, 50), dvec3(193.0 / 255, 80.0 / 255.0, 27.0 / 255), dvec3(0.0), DIFF));
+    world.models.push_back(create_model(&(*it), dvec3(35, 0, 50), dvec3(193.0 / 255, 80.0 / 255.0, 27.0 / 255), dvec3(0.0), DIFF));
   }
 
   Camera camera;
