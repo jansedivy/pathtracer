@@ -586,7 +586,7 @@ int main(int argc, char *argv[]) {
   camera.width = width;
   camera.height = height;
 
-  u32 tile_count_x = 1;
+  u32 tile_count_x = 7;
   u32 tile_count_y = 8;
 
   RenderData data[tile_count_x * tile_count_y];
@@ -673,15 +673,18 @@ int main(int argc, char *argv[]) {
     for (u32 i=0; i<array_count(data); i++) {
       RenderData *item = data + i;
 
-      int tile_width = item->maxX - item->minX;
-      int tile_height = item->maxY - item->minY;
+      int tile_width = (item->maxX - item->minX) * ((float)window_width / (float)width);
+      int tile_height = (item->maxY - item->minY) * ((float)window_height / (float)height);
+
+      float scale_x = ((float)window_width / (float)width);
+      float scale_y = ((float)window_height / (float)height);
 
       if (item->state == RenderTileState::RENDERING) {
         SDL_Rect rect;
-        rect.x = item->index_x * tile_width;
-        rect.y = item->index_y * tile_height;
-        rect.w = tile_width;
-        rect.h = tile_height;
+        rect.x = glm::floor((float)item->minX * scale_x);
+        rect.y = glm::floor((float)item->minY * scale_y);
+        rect.w = glm::ceil((float)(item->maxX - item->minX) * scale_x);
+        rect.h = glm::ceil((float)(item->maxY - item->minY) * scale_y);
 
         rect.y = window_height - rect.y - rect.h;
 
