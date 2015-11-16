@@ -16,12 +16,13 @@ libraries="
   ./build/$app_name/Contents/Frameworks/libassimp.3.1.1.dylib
 
   -I./libs/stb
+  -I./libs/glm
 
   -F./build/$app_name/Contents/Frameworks
   -rpath @executable_path/../Frameworks
 "
 
-engine_main="main.cpp $libraries"
+engine_main="src/main.cpp $libraries"
 engine_flags="
   -framework SDL2
 "

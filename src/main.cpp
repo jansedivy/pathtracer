@@ -16,8 +16,6 @@
 
 #include <SDL2/SDL.h>
 
-#include <vector>
-
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 
 #include "stb_image_write.h"
@@ -36,9 +34,18 @@ using glm::dvec4;
 
 #define array_count(arr) (sizeof(arr) / sizeof(arr[0]))
 
+#include "queue.h"
+#include "array.h"
+
 struct AABB {
   dvec3 min;
   dvec3 max;
+};
+
+enum Material {
+  DIFF,
+  REFR,
+  REFL
 };
 
 struct Mesh {
@@ -57,6 +64,13 @@ struct Mesh {
   AABB bounds;
 };
 
+struct Model {
+  Mesh mesh;
+  dvec3 color;
+  dvec3 emission;
+  Material material;
+};
+
 void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indices_count, u32 uv_count) {
   u32 vertices_size = vertices_count * sizeof(float);
   u32 normals_size = normals_count * sizeof(float);
@@ -71,6 +85,7 @@ void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indice
   float *uv = (float*)(data + vertices_size + normals_size + indices_size);
 
   mesh->data = data;
+
   mesh->vertices = vertices;
   mesh->vertices_count = vertices_count;
 
@@ -84,7 +99,11 @@ void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indice
   mesh->uv_count = uv_count;
 }
 
-void load_model_work(std::vector<Mesh> *models, const char *path) {
+struct World {
+  Array<Model> models;
+};
+
+void load_model_work(World *world, const char *path) {
   Assimp::Importer importer;
 
   const aiScene* scene = importer.ReadFile(path, aiProcess_GenNormals |
@@ -116,6 +135,23 @@ void load_model_work(std::vector<Mesh> *models, const char *path) {
 
         index_count += face.mNumIndices;
       }
+
+      Model model;
+      model.material = DIFF;
+
+      aiMaterial *material = scene->mMaterials[mesh_data->mMaterialIndex];
+
+      aiColor4D diffuse;
+      aiColor4D emissive;
+
+      if (aiGetMaterialColor(material, AI_MATKEY_COLOR_DIFFUSE, &diffuse) == AI_SUCCESS) {
+        model.color = dvec3(diffuse.r, diffuse.g, diffuse.b);
+      }
+
+      if (aiGetMaterialColor(material, AI_MATKEY_COLOR_EMISSIVE, &emissive) == AI_SUCCESS) {
+        model.emission = dvec3(emissive.r, emissive.g, emissive.b);
+      }
+
       u32 vertices_count = count * 3;
       u32 normals_count = vertices_count;
       u32 uv_count = 0;
@@ -125,13 +161,12 @@ void load_model_work(std::vector<Mesh> *models, const char *path) {
       u32 normals_index = 0;
       u32 indices_index = 0;
 
-      Mesh mesh;
-      allocate_mesh(&mesh, vertices_count, normals_count, indices_count, uv_count);
+      allocate_mesh(&model.mesh, vertices_count, normals_count, indices_count, uv_count);
 
       for (u32 l=0; l<mesh_data->mNumVertices; l++) {
-        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].x;
-        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].y;
-        mesh.vertices[vertices_index++] = mesh_data->mVertices[l].z;
+        model.mesh.vertices[vertices_index++] = mesh_data->mVertices[l].x;
+        model.mesh.vertices[vertices_index++] = mesh_data->mVertices[l].y;
+        model.mesh.vertices[vertices_index++] = mesh_data->mVertices[l].z;
 
 #define FIND_MIN(a, b) if ((a) < (b)) { (b) = (a); }
 #define FIND_MAX(a, b) if ((a) > (b)) { (b) = (a); }
@@ -148,113 +183,28 @@ void load_model_work(std::vector<Mesh> *models, const char *path) {
           max_distance = new_distance;
         }
 
-        mesh.normals[normals_index++] = mesh_data->mNormals[l].x;
-        mesh.normals[normals_index++] = mesh_data->mNormals[l].y;
-        mesh.normals[normals_index++] = mesh_data->mNormals[l].z;
+        model.mesh.normals[normals_index++] = mesh_data->mNormals[l].x;
+        model.mesh.normals[normals_index++] = mesh_data->mNormals[l].y;
+        model.mesh.normals[normals_index++] = mesh_data->mNormals[l].z;
       }
 
       for (u32 l=0; l<mesh_data->mNumFaces; l++) {
         aiFace face = mesh_data->mFaces[l];
 
         for (u32 j=0; j<face.mNumIndices; j++) {
-          mesh.indices[indices_index++] = face.mIndices[j];
+          model.mesh.indices[indices_index++] = face.mIndices[j];
         }
       }
 
-      mesh.bounds = bounds;
-      models->push_back(mesh);
+      model.mesh.bounds = bounds;
+      push_back(world->models, model);
     }
   }
-}
-
-typedef void PlatformWorkQueueCallback(void *data);
-
-struct WorkEntry {
-  PlatformWorkQueueCallback *callback;
-  void *data;
-};
-
-struct Queue {
-  u32 volatile next_entry_to_write;
-  u32 volatile next_entry_to_read;
-
-  u32 volatile completion_count;
-  u32 volatile completion_goal;
-
-  WorkEntry entries[2048];
-
-  SDL_sem *semaphore;
-};
-
-bool do_queue_work(Queue *queue) {
-  bool sleep = false;
-
-  u32 original_next_index = queue->next_entry_to_read;
-  int new_next_index = (original_next_index + 1) % array_count(queue->entries);
-
-  if (original_next_index != queue->next_entry_to_write) {
-    SDL_bool value = SDL_AtomicCAS((SDL_atomic_t *)&queue->next_entry_to_read, original_next_index, new_next_index);
-
-    if (value) {
-      WorkEntry *entry = queue->entries + original_next_index;
-      entry->callback(entry->data);
-
-      SDL_AtomicIncRef((SDL_atomic_t *)&queue->completion_count);
-    }
-  } else {
-    sleep = true;
-  }
-
-  return sleep;
-}
-
-static int thread_function(void *data) {
-  Queue *queue = (Queue *)data;
-
-  while (true) {
-    if (do_queue_work(queue)) {
-      SDL_SemWait(queue->semaphore);
-    }
-  }
-}
-
-void add_work(Queue *queue, PlatformWorkQueueCallback *callback, void *data) {
-  u32 new_next_entry_to_write = (queue->next_entry_to_write + 1) % array_count(queue->entries);
-
-  assert(new_next_entry_to_write != queue->next_entry_to_read);
-
-  WorkEntry *entry = queue->entries + queue->next_entry_to_write;
-
-  entry->callback = callback;
-  entry->data = data;
-
-  queue->completion_goal += 1;
-
-  SDL_CompilerBarrier();
-
-  queue->next_entry_to_write = new_next_entry_to_write;
-  SDL_SemPost(queue->semaphore);
-}
-
-void complete_all_work(Queue *queue) {
-  while (queue->completion_goal != queue->completion_count) {
-    do_queue_work(queue);
-    printf("%d/%d\n", queue->completion_count, queue->completion_goal);
-  }
-
-  queue->completion_count = 0;
-  queue->completion_goal = 0;
 }
 
 struct Ray {
   dvec3 origin;
   dvec3 direction;
-};
-
-enum Material {
-  DIFF,
-  REFR,
-  REFL
 };
 
 inline double random_double() {
@@ -270,107 +220,6 @@ struct HitResult {
   Material material;
   double distance;
 };
-
-enum ObjectType {
-  SphereType,
-  PlaneType,
-  ModelType
-};
-
-struct Sphere {
-  double radius;
-  dvec3 position;
-  dvec3 emission;
-  dvec3 color;
-  Material material;
-};
-
-struct Plane {
-  dvec3 position;
-  dvec3 normal;
-  dvec3 emission;
-  dvec3 color;
-  Material material;
-};
-
-struct ModelObject {
-  Mesh *model;
-  dvec3 position;
-  dvec3 color;
-  dvec3 emission;
-  Material material;
-};
-
-struct SceneObject {
-  ObjectType type;
-
-  Sphere sphere;
-  Plane plane;
-  ModelObject model;
-};
-
-
-void intersect_plane(HitResult *result, Plane *plane, const Ray &r) {
-  float denom = glm::dot(plane->normal, r.direction);
-  if (fabs(denom) > 0.0) {
-    double t = glm::dot(plane->position - r.origin, plane->normal) / denom;
-    if (t >= 0.001) {
-      result->hit = true;
-      result->position = r.origin + r.direction * t;
-      result->normal = plane->normal;
-      result->color = plane->color;
-      result->emission = plane->emission;
-      result->material = plane->material;
-      result->distance = t;
-      return;
-    }
-  }
-
-  result->hit = false;
-  return;
-}
-
-void intersect_sphere(HitResult *result, Sphere *sphere, const Ray &r) {
-  dvec3 op = sphere->position - r.origin;
-  double t;
-  double eps = 1e-4;
-  double b = glm::dot(op, r.direction);
-  double det = b * b - glm::dot(op, op) + sphere->radius * sphere->radius;
-
-  if (det < 0) {
-    result->hit = false;
-    return;
-  } else {
-    det = sqrt(det);
-  }
-
-  t = (t = b - det);
-  if (t > eps) {
-    result->hit = true;
-    result->position = r.origin + r.direction * t;
-    result->normal = glm::normalize(result->position - sphere->position);
-    result->color = sphere->color;
-    result->emission = sphere->emission;
-    result->material = sphere->material;
-    result->distance = t;
-    return;
-  }
-
-  t = b + det;
-  if (t > eps) {
-    result->hit = true;
-    result->position = r.origin + r.direction * t;
-    result->normal = glm::normalize(result->position - sphere->position);
-    result->color = sphere->color;
-    result->emission = sphere->emission;
-    result->material = sphere->material;
-    result->distance = t;
-    return;
-  }
-
-  result->hit = false;
-  return;
-}
 
 bool aabb_intersection(AABB b, Ray r) {
   dvec3 dirfrac;
@@ -403,50 +252,38 @@ bool aabb_intersection(AABB b, Ray r) {
   return true;
 }
 
-void intersect_model(HitResult *result, ModelObject *model, const Ray &r) {
+void intersect_model(HitResult *result, Model *model, const Ray &r) {
   bool hit = false;
-  double scale = 12.0;
 
-  dmat4 model_view;
-  model_view = glm::translate(model_view, model->position);
-  model_view = glm::scale(model_view, dvec3(scale));
-  dmat4 res = glm::inverse(model_view);
-
-  AABB transformed_bounds;
-  transformed_bounds.min = dvec3(model_view * dvec4(model->model->bounds.min, 1.0));
-  transformed_bounds.max = dvec3(model_view * dvec4(model->model->bounds.max, 1.0));
-
-  if (!aabb_intersection(transformed_bounds, r)) {
+  if (!aabb_intersection(model->mesh.bounds, r)) {
     result->hit = false;
     return;
   }
 
-  dvec3 start = dvec3(res * dvec4(r.origin, 1.0));
-  dvec3 direction = dvec3(res * dvec4(r.direction, 0.0));
-
-  Mesh *mesh = model->model;
+  dvec3 start = r.origin;
+  dvec3 direction = r.direction;
 
   double distance = DBL_MAX;
 
   dvec3 result_position;
 
   u32 index;
-  for (u32 i=0; i<mesh->indices_count; i += 3) {
-    int indices_a = mesh->indices[i + 0] * 3;
-    int indices_b = mesh->indices[i + 1] * 3;
-    int indices_c = mesh->indices[i + 2] * 3;
+  for (u32 i=0; i<model->mesh.indices_count; i += 3) {
+    int indices_a = model->mesh.indices[i + 0] * 3;
+    int indices_b = model->mesh.indices[i + 1] * 3;
+    int indices_c = model->mesh.indices[i + 2] * 3;
 
-    dvec3 a = dvec3(mesh->vertices[indices_a + 0],
-                    mesh->vertices[indices_a + 1],
-                    mesh->vertices[indices_a + 2]);
+    dvec3 a = dvec3(model->mesh.vertices[indices_a + 0],
+                    model->mesh.vertices[indices_a + 1],
+                    model->mesh.vertices[indices_a + 2]);
 
-    dvec3 b = dvec3(mesh->vertices[indices_b + 0],
-                    mesh->vertices[indices_b + 1],
-                    mesh->vertices[indices_b + 2]);
+    dvec3 b = dvec3(model->mesh.vertices[indices_b + 0],
+                    model->mesh.vertices[indices_b + 1],
+                    model->mesh.vertices[indices_b + 2]);
 
-    dvec3 c = dvec3(mesh->vertices[indices_c + 0],
-                    mesh->vertices[indices_c + 1],
-                    mesh->vertices[indices_c + 2]);
+    dvec3 c = dvec3(model->mesh.vertices[indices_c + 0],
+                    model->mesh.vertices[indices_c + 1],
+                    model->mesh.vertices[indices_c + 2]);
 
     if (glm::intersectRayTriangle(start, direction, a, b, c, result_position)) {
       if (result_position.z < distance) {
@@ -458,21 +295,21 @@ void intersect_model(HitResult *result, ModelObject *model, const Ray &r) {
   }
 
   if (hit) {
-    int indices_a = mesh->indices[index + 0] * 3;
-    int indices_b = mesh->indices[index + 1] * 3;
-    int indices_c = mesh->indices[index + 2] * 3;
+    int indices_a = model->mesh.indices[index + 0] * 3;
+    int indices_b = model->mesh.indices[index + 1] * 3;
+    int indices_c = model->mesh.indices[index + 2] * 3;
 
-    dvec3 normal_a = dvec3(mesh->normals[indices_a + 0],
-                           mesh->normals[indices_a + 1],
-                           mesh->normals[indices_a + 2]);
+    dvec3 normal_a = dvec3(model->mesh.normals[indices_a + 0],
+                           model->mesh.normals[indices_a + 1],
+                           model->mesh.normals[indices_a + 2]);
 
-    dvec3 normal_b = dvec3(mesh->normals[indices_b + 0],
-                           mesh->normals[indices_b + 1],
-                           mesh->normals[indices_b + 2]);
+    dvec3 normal_b = dvec3(model->mesh.normals[indices_b + 0],
+                           model->mesh.normals[indices_b + 1],
+                           model->mesh.normals[indices_b + 2]);
 
-    dvec3 normal_c = dvec3(mesh->normals[indices_c + 0],
-                           mesh->normals[indices_c + 1],
-                           mesh->normals[indices_c + 2]);
+    dvec3 normal_c = dvec3(model->mesh.normals[indices_c + 0],
+                           model->mesh.normals[indices_c + 1],
+                           model->mesh.normals[indices_c + 2]);
     result->hit = true;
     result->position = r.origin + r.direction * distance;
     result->normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0);
@@ -483,35 +320,13 @@ void intersect_model(HitResult *result, ModelObject *model, const Ray &r) {
   }
 }
 
-struct World {
-  std::vector<Sphere> spheres;
-  std::vector<Plane> planes;
-  std::vector<ModelObject> models;
-};
-
 void intersect_all(HitResult *closest, World *world, const Ray &r) {
   HitResult hit;
   closest->hit = false;
   double distance = DBL_MAX;
 
-  for (auto it = world->spheres.begin(); it != world->spheres.end(); it++) {
-    intersect_sphere(&hit, &(*it), r);
-    if (hit.hit && hit.distance < distance) {
-      *closest = hit;
-      distance = hit.distance;
-    }
-  }
-
-  for (auto it = world->planes.begin(); it != world->planes.end(); it++) {
-    intersect_plane(&hit, &(*it), r);
-    if (hit.hit && hit.distance < distance) {
-      *closest = hit;
-      distance = hit.distance;
-    }
-  }
-
-  for (auto it = world->models.begin(); it != world->models.end(); it++) {
-    intersect_model(&hit, &(*it), r);
+  for (auto it = begin(world->models); it != end(world->models); it++) {
+    intersect_model(&hit, it, r);
     if (hit.hit && hit.distance < distance) {
       *closest = hit;
       distance = hit.distance;
@@ -559,10 +374,10 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
       // http://www.rorydriscoll.com/2009/01/07/better-sampling/
       double angle = 2.0 * M_PI * random_double();
       double u = random_double();
-      double r = sqrt(u);
+      double r = glm::sqrt(u);
 
       dvec3 sdir;
-      if (fabs(normal.x) > 0.1) {
+      if (glm::abs(normal.x) > 0.1) {
         sdir = glm::normalize(glm::cross(dvec3(0.0, 1.0, 0.0), normal));
       } else {
         sdir = glm::normalize(glm::cross(dvec3(1.0, 0.0, 0.0), normal));
@@ -570,9 +385,9 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
 
       dvec3 tdir = glm::cross(normal, sdir);
 
-      dvec3 d = (sdir * cos(angle) * r +
-          tdir * sin(angle) * r +
-          normal * glm::max(0.0, sqrt(1.0 - u)));
+      dvec3 d = (sdir * glm::cos(angle) * r +
+          tdir * glm::sin(angle) * r +
+          normal * glm::max(0.0, glm::sqrt(1.0 - u)));
 
       ray.origin = hit_position;
       ray.direction = glm::normalize(d);
@@ -592,7 +407,7 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
         continue;
       }
 
-      dvec3 tdir = glm::normalize(ray.direction*nnt - n*((into?1:-1)*(ddn*nnt+sqrt(cos2t))));
+      dvec3 tdir = glm::normalize(ray.direction*nnt - n*((into?1:-1)*(ddn*nnt+glm::sqrt(cos2t))));
       double a=nt-nc;
       double b=nt+nc;
       double R0=a*a/(b*b);
@@ -677,15 +492,19 @@ inline int to_int(double x) {
   return int(pow(glm::clamp(x, 0.0, 1.0), 1 / 2.2) * 255 + .5);
 }
 
-void export_image(u8 *pixels, dvec3 *colors, int width, int height) {
+void export_image(dvec3 *colors, int width, int height) {
+  u8 *dst = (u8 *)malloc(4 * width * height);
+
   for (int i=0; i<width*height; i++) {
-    pixels[i * 4 + 0] = to_int(colors[i].x);
-    pixels[i * 4 + 1] = to_int(colors[i].y);
-    pixels[i * 4 + 2] = to_int(colors[i].z);
-    pixels[i * 4 + 3] = 255;
+    dst[i * 4 + 0] = to_int(colors[i].x);
+    dst[i * 4 + 1] = to_int(colors[i].y);
+    dst[i * 4 + 2] = to_int(colors[i].z);
+    dst[i * 4 + 3] = 255;
   }
 
-  stbi_write_png("../../../image.png", width, height, 4, pixels, width * 4);
+  stbi_write_png("../../../image.png", width, height, 4, dst, width * 4);
+
+  free(dst);
 }
 
 void render(void *data) {
@@ -708,10 +527,11 @@ void render(void *data) {
     for (int x=minX; x<maxX; x++) {
       int i = (height - y - 1) * width + x;
       dvec3 pixel_color = dvec3(0.0);
+
       for (int sy=0; sy<2; sy++) {
         for (int sx=0; sx<2; sx++) {
-          double r1=2*random_double(), dx=r1<1 ? sqrt(r1)-1: 1-sqrt(2-r1);
-          double r2=2*random_double(), dy=r2<1 ? sqrt(r2)-1: 1-sqrt(2-r2);
+          double r1=2*random_double(), dx=r1<1 ? glm::sqrt(r1)-1: 1-glm::sqrt(2-r1);
+          double r2=2*random_double(), dy=r2<1 ? glm::sqrt(r2)-1: 1-glm::sqrt(2-r2);
 
           Ray ray = get_camera_ray(camera, (sx + 0.5 + dx) / 2.0 + x - 0.5, (sy + 0.5 + dy) / 2.0 + y - 0.5);
 
@@ -730,32 +550,6 @@ void render(void *data) {
   work->state = RenderTileState::DONE;
 }
 
-Plane create_plane(dvec3 position, dvec3 normal, dvec3 color, dvec3 emission, Material material) {
-  Plane plane;
-  plane.position = position;
-  plane.normal = normal;
-  plane.color = color;
-  plane.emission = emission;
-  plane.material = material;
-  return plane;
-}
-
-ModelObject create_model(Mesh *model, dvec3 position, dvec3 color, dvec3 emission, Material material) {
-  ModelObject model_object;
-  model_object.model = model;
-  model_object.position = position;
-  model_object.color = color;
-  model_object.emission = emission;
-  model_object.material = material;
-  return model_object;
-}
-
-bool render_tile_sort(RenderData &a, RenderData &b) {
-  glm::vec2 center = glm::vec2(4, 4);
-
-  return glm::distance(glm::vec2(a.index_x, a.index_y), center) < glm::distance(glm::vec2(b.index_x, b.index_y), center);
-}
-
 int main(int argc, char *argv[]) {
   std::srand(std::time(NULL));
 #if 0
@@ -764,70 +558,44 @@ int main(int argc, char *argv[]) {
   int max_bounces = 3;
   int samps = 300;
 #else
-  int width = 512;
-  int height = width * (3.0 / 4.0);
-  int max_bounces = 1;
-  int samps = 10;
+  int width = 256;
+  int height = width * (4.0 / 4.0);
+  int max_bounces = 2;
+  int samps = 500;
 #endif
   float aspect = (float)height / (float)width;
-  u32 tile_start_x = 0;
-  u32 tile_start_y = 0;
 
   chdir(SDL_GetBasePath());
 
   Queue main_queue = {};
-  main_queue.next_entry_to_write = 0;
-  main_queue.next_entry_to_read = 0;
-
-  main_queue.completion_count = 0;
-  main_queue.completion_goal = 0;
-  main_queue.semaphore = SDL_CreateSemaphore(0);
-
-  for (int i=0; i<SDL_GetCPUCount(); i++) {
-    SDL_CreateThread(thread_function, "main_worker_thread", &main_queue);
-  }
+  initialize_queue(&main_queue, 64);
+  create_workers(&main_queue, SDL_GetCPUCount());
 
   u8 *pixels = (u8 *)malloc(width * height * 4);
 
-  std::vector<Mesh>models;
+  World world;
 
-  load_model_work(&models, "model.obj");
+  load_model_work(&world, "box.obj");
 
   dvec3 *colors = new dvec3[width * height];
 
-  World world;
-
-  world.spheres.push_back({ 40, dvec3(50, 115, 60), dvec3(10),dvec3(1,1,1), DIFF });
-  world.spheres.push_back({ 16.5, dvec3(73,16.5,55), dvec3(),dvec3(1,1,1)*0.999, REFL });
-
-  world.planes.push_back(create_plane(dvec3(0, 0, 0), dvec3(0.0, 0.0, 1.0), dvec3(0.75), dvec3(0.0), DIFF));
-  world.planes.push_back(create_plane(dvec3(5, 0, 0), dvec3(1.0, 0.0, 0.0), dvec3(39.0 / 255.0, 39.0 / 255.0, 214.0 / 255.0), dvec3(0.0), DIFF));
-  world.planes.push_back(create_plane(dvec3(95, 0, 0), dvec3(1.0, 0.0, 0.0), dvec3(214.0 / 255.0, 204.0 / 255.0, 39.0 / 214.0), dvec3(0.0), DIFF));
-  world.planes.push_back(create_plane(dvec3(0, 80, 0), dvec3(0.0, 1.0, 0.0), dvec3(0.75), dvec3(), DIFF));
-  world.planes.push_back(create_plane(dvec3(0, 0, 0), dvec3(0.0, 1.0, 0.0), dvec3(0.75), dvec3(0.0), DIFF));
-  world.planes.push_back(create_plane(dvec3(0, 0, 160), dvec3(0.0, 0.0, 1.0), dvec3(0.75), dvec3(0.0), DIFF));
-
-  for (auto it = models.begin(); it != models.end(); it++) {
-    world.models.push_back(create_model(&(*it), dvec3(35, 0, 50), dvec3(193.0 / 255, 80.0 / 255.0, 27.0 / 255), dvec3(0.0), DIFF));
-  }
-
   Camera camera;
-  camera.position = dvec3(50.0, 42.0, 155.6);
-  camera.view_matrix = glm::perspective(glm::radians(60.0), (double)width / (double)height, 1.0, 1000.0);
+  camera.position = dvec3(0.0, 1.0, 3.1);
+  camera.view_matrix = glm::perspective(glm::radians(50.0), (double)width / (double)height, 1.0, 1000.0);
   camera.view_matrix = glm::translate(camera.view_matrix, (camera.position * -1.0));
   camera.width = width;
   camera.height = height;
 
-  u32 tile_count_x = 9;
-  u32 tile_count_y = 9;
-
-  u64 start = get_performance_counter();
+  u32 tile_count_x = 1;
+  u32 tile_count_y = 8;
 
   RenderData data[tile_count_x * tile_count_y];
   u32 tile_width = width / tile_count_x;
   u32 tile_height = height / tile_count_y;
 
   u32 count = 0;
+  u32 tile_start_x = 0;
+  u32 tile_start_y = 0;
   for (u32 y=tile_start_y; y<tile_count_y; y++) {
     for (u32 x=tile_start_x; x<tile_count_x; x++) {
       RenderData *item = data + count++;
@@ -838,12 +606,13 @@ int main(int argc, char *argv[]) {
       item->minY = y * tile_height;
       item->maxX = item->minX + tile_width;
       item->maxY = item->minY + tile_height;
+      item->state = RenderTileState::WAITING;
+
+      item->colors = colors;
+      item->camera = &camera;
+      item->world = &world;
       item->samps = samps;
       item->max_bounces = max_bounces;
-      item->camera = &camera;
-      item->colors = colors;
-      item->state = RenderTileState::WAITING;
-      item->world = &world;
 
       if (x == (tile_count_x - 1)) {
         item->maxX = width;
@@ -855,14 +624,11 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  std::sort(data, data + array_count(data) - 1, render_tile_sort);
-
   for (u32 i=0; i<array_count(data); i++) {
     add_work(&main_queue, render, data + i);
   }
 
-#if 1
-  int window_width = 1080;
+  int window_width = 720;
   int window_height = window_width * aspect;
 
   SDL_Init(SDL_INIT_EVERYTHING);
@@ -873,9 +639,6 @@ int main(int argc, char *argv[]) {
       SDL_WINDOW_SHOWN);
 
   SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-
-  u8 *screen = (u8 *)malloc(width * height * 4);
-  memset(screen, 0, width * height * 4);
 
   SDL_Rect screen_rect;
   screen_rect.x = 0;
@@ -899,48 +662,42 @@ int main(int argc, char *argv[]) {
     }
 
     for (int i=0; i<width*height; i++) {
-      screen[i * 4 + 0] = to_int(colors[i].z);
-      screen[i * 4 + 1] = to_int(colors[i].y);
-      screen[i * 4 + 2] = to_int(colors[i].x);
-      screen[i * 4 + 3] = 255;
+      pixels[i * 4 + 0] = to_int(colors[i].z);
+      pixels[i * 4 + 1] = to_int(colors[i].y);
+      pixels[i * 4 + 2] = to_int(colors[i].x);
+      pixels[i * 4 + 3] = 255;
     }
-
-    SDL_UpdateTexture(screen_texture, &screen_rect, screen, width * 4);
-
+    SDL_UpdateTexture(screen_texture, &screen_rect, pixels, width * 4);
     SDL_RenderCopy(renderer, screen_texture, NULL, NULL);
-
-    SDL_SetRenderDrawColor(renderer, 228, 214, 42, 255);
 
     for (u32 i=0; i<array_count(data); i++) {
       RenderData *item = data + i;
 
-      int tile_width = (item->maxX - item->minX) * ((float)window_width / (float)width);
-      int tile_height = (item->maxY - item->minY) * ((float)window_height / (float)height);
+      int tile_width = item->maxX - item->minX;
+      int tile_height = item->maxY - item->minY;
 
       if (item->state == RenderTileState::RENDERING) {
         SDL_Rect rect;
         rect.x = item->index_x * tile_width;
-        rect.y = window_height - (item->index_y * tile_height);
+        rect.y = item->index_y * tile_height;
         rect.w = tile_width;
-        rect.h = -1 * tile_height;
+        rect.h = tile_height;
+
+        rect.y = window_height - rect.y - rect.h;
+
+        SDL_SetRenderDrawColor(renderer, 228, 214, 42, 255);
         SDL_RenderDrawRect(renderer, &rect);
       }
     }
 
     if (!image_exported && main_queue.completion_goal == main_queue.completion_count) {
-      export_image(pixels, colors, width, height);
+      export_image(colors, width, height);
       image_exported = true;
     }
 
     SDL_RenderPresent(renderer);
-    SDL_Delay(20);
+    SDL_Delay(50);
   }
-#else
-  complete_all_work(&main_queue);
-  export_image(pixels, colors, width, height);
-  float time = (float)(get_performance_counter() - start)/(float)get_performance_frequency() * 1000.0f;
-  printf("%.3fms\n", time);
-#endif
 
   return 1;
 }
