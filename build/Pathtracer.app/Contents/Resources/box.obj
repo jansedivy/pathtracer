@@ -22,10 +22,10 @@ usemtl floor
 f -4 -3 -2 -1
 
 ## Object ceiling
-v  -1.00  2.00   2.70
+v  -1.00  2.00   3.10
 v  -1.00  2.00  -1.00
 v   1.00  2.00  -1.00
-v   1.00  2.00   2.70
+v   1.00  2.00   3.10
 
 g ceiling
 usemtl ceiling
@@ -42,10 +42,10 @@ usemtl backWall
 f -4 -3 -2 -1
 
 ## Object frontWall
-v  -1.00  0.00  2.70
-v   1.00  0.00  2.70
-v   1.00  2.00  2.70
-v  -1.00  2.00  2.70
+v  -1.00  0.00  3.10
+v   1.00  0.00  3.10
+v   1.00  2.00  3.10
+v  -1.00  2.00  3.10
 
 g frontWall
 usemtl frontWall
@@ -53,8 +53,8 @@ f -1 -2 -3 -4
 
 ## Object rightwall
 v 1.00  0.00  -1.00
-v 1.00  0.00   2.70
-v 1.00  2.00   2.70
+v 1.00  0.00   3.10
+v 1.00  2.00   3.10
 v 1.00  2.00  -1.00
 
 g rightWall
@@ -62,10 +62,10 @@ usemtl rightWall
 f -4 -3 -2 -1
 
 ## Object leftWall
-v  -1.00  0.00   2.70
+v  -1.00  0.00   3.10
 v  -1.00  0.00  -1.00
 v  -1.00  2.00  -1.00
-v  -1.00  2.00   2.70
+v  -1.00  2.00   3.10
 
 g leftWall
 usemtl leftWall
