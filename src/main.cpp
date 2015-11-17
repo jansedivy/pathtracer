@@ -580,8 +580,8 @@ int main(int argc, char *argv[]) {
   dvec3 *colors = new dvec3[width * height];
 
   Camera camera;
-  camera.position = dvec3(0.0, 1.0, 3.1);
-  camera.view_matrix = glm::perspective(glm::radians(50.0), (double)width / (double)height, 1.0, 1000.0);
+  camera.position = dvec3(0.0, 1.0, 2.65);
+  camera.view_matrix = glm::perspective(glm::radians(60.0), (double)width / (double)height, 0.1, 1000.0);
   camera.view_matrix = glm::translate(camera.view_matrix, (camera.position * -1.0));
   camera.width = width;
   camera.height = height;
