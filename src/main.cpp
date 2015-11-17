@@ -702,5 +702,5 @@ int main(int argc, char *argv[]) {
     SDL_Delay(50);
   }
 
-  return 1;
+  exit(1);
 }
