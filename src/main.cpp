@@ -463,10 +463,10 @@ namespace RenderTileState {
 }
 
 struct RenderData {
-  int minX;
-  int minY;
-  int maxX;
-  int maxY;
+  int min_x;
+  int min_y;
+  int max_x;
+  int max_y;
 
   int samps;
   int max_bounces;
@@ -509,10 +509,10 @@ void export_image(dvec3 *colors, int width, int height) {
 
 void render(void *data) {
   RenderData *work = (RenderData *)data;
-  int minX = work->minX;
-  int minY = work->minY;
-  int maxX = work->maxX;
-  int maxY = work->maxY;
+  int min_x = work->min_x;
+  int min_y = work->min_y;
+  int max_x = work->max_x;
+  int max_y = work->max_y;
   int samps = work->samps;
   int max_bounces = work->max_bounces;
   Camera *camera = work->camera;
@@ -523,8 +523,8 @@ void render(void *data) {
 
   work->state = RenderTileState::RENDERING;
 
-  for (int y=minY; y<maxY; y++) {
-    for (int x=minX; x<maxX; x++) {
+  for (int y=min_y; y<max_y; y++) {
+    for (int x=min_x; x<max_x; x++) {
       int i = (height - y - 1) * width + x;
       dvec3 pixel_color = dvec3(0.0);
 
@@ -602,10 +602,10 @@ int main(int argc, char *argv[]) {
 
       item->index_x = x;
       item->index_y = y;
-      item->minX = x * tile_width;
-      item->minY = y * tile_height;
-      item->maxX = item->minX + tile_width;
-      item->maxY = item->minY + tile_height;
+      item->min_x = x * tile_width;
+      item->min_y = y * tile_height;
+      item->max_x = item->min_x + tile_width;
+      item->max_y = item->min_y + tile_height;
       item->state = RenderTileState::WAITING;
 
       item->colors = colors;
@@ -615,11 +615,11 @@ int main(int argc, char *argv[]) {
       item->max_bounces = max_bounces;
 
       if (x == (tile_count_x - 1)) {
-        item->maxX = width;
+        item->max_x = width;
       }
 
       if (y == (tile_count_y - 1)) {
-        item->maxY = height;
+        item->max_y = height;
       }
     }
   }
@@ -673,18 +673,15 @@ int main(int argc, char *argv[]) {
     for (u32 i=0; i<array_count(data); i++) {
       RenderData *item = data + i;
 
-      int tile_width = (item->maxX - item->minX) * ((float)window_width / (float)width);
-      int tile_height = (item->maxY - item->minY) * ((float)window_height / (float)height);
-
       float scale_x = ((float)window_width / (float)width);
       float scale_y = ((float)window_height / (float)height);
 
       if (item->state == RenderTileState::RENDERING) {
         SDL_Rect rect;
-        rect.x = glm::floor((float)item->minX * scale_x);
-        rect.y = glm::floor((float)item->minY * scale_y);
-        rect.w = glm::ceil((float)(item->maxX - item->minX) * scale_x);
-        rect.h = glm::ceil((float)(item->maxY - item->minY) * scale_y);
+        rect.x = glm::floor((float)item->min_x * scale_x);
+        rect.y = glm::floor((float)item->min_y * scale_y);
+        rect.w = glm::ceil((float)(item->max_x - item->min_x) * scale_x);
+        rect.h = glm::ceil((float)(item->max_y - item->min_y) * scale_y);
 
         rect.y = window_height - rect.y - rect.h;
 
