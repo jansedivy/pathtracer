@@ -32,6 +32,8 @@ using glm::dvec3;
 using glm::dmat4;
 using glm::dvec4;
 
+static double TAU = 2.0 * glm::pi<double>();
+
 #define array_count(arr) (sizeof(arr) / sizeof(arr[0]))
 
 #include "queue.h"
@@ -338,6 +340,16 @@ dvec3 reflect(const dvec3 &value, const dvec3 &normal) {
   return value - normal * 2.0 * glm::dot(normal, value);
 }
 
+dvec3 cosine_sample_hemisphere(double u1, double u2) {
+  double theta = TAU * u2;
+  double r = glm::sqrt(u1);
+
+  double x = r * glm::cos(theta);
+  double y = r * glm::sin(theta);
+
+  return dvec3(x, y, glm::sqrt(glm::max(0.0, 1.0 - u1)));
+}
+
 dvec3 radiance(World *world, Ray ray, int max_bounces) {
   int depth_iteration = 0;
 
@@ -372,10 +384,6 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
 
     if (hit.material == DIFF) {
       // http://www.rorydriscoll.com/2009/01/07/better-sampling/
-      double angle = 2.0 * M_PI * random_double();
-      double u = random_double();
-      double r = glm::sqrt(u);
-
       dvec3 sdir;
       if (glm::abs(normal.x) > 0.1) {
         sdir = glm::normalize(glm::cross(dvec3(0.0, 1.0, 0.0), normal));
@@ -385,9 +393,9 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
 
       dvec3 tdir = glm::cross(normal, sdir);
 
-      dvec3 d = (sdir * glm::cos(angle) * r +
-          tdir * glm::sin(angle) * r +
-          normal * glm::max(0.0, glm::sqrt(1.0 - u)));
+      dvec3 sample = cosine_sample_hemisphere(random_double(), random_double());
+
+      dvec3 d = (sdir * sample.x + tdir * sample.y + normal * sample.z);
 
       ray.origin = hit_position;
       ray.direction = glm::normalize(d);
