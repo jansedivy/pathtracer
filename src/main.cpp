@@ -559,18 +559,12 @@ void render(void *data) {
 }
 
 int main(int argc, char *argv[]) {
-  std::srand(std::time(NULL));
-#if 0
-  int width = 2880/2;
-  int height = 1800/2;
-  int max_bounces = 3;
-  int samps = 300;
-#else
-  int width = 256;
+  std::srand(std::time(0));
+  int width = 512;
   int height = width * (4.0 / 4.0);
-  int max_bounces = 2;
-  int samps = 500;
-#endif
+  int max_bounces = 10;
+  int samps = 1000;
+
   float aspect = (float)height / (float)width;
 
   chdir(SDL_GetBasePath());
@@ -675,11 +669,12 @@ int main(int argc, char *argv[]) {
       pixels[i * 4 + 2] = to_int(colors[i].x);
       pixels[i * 4 + 3] = 255;
     }
+
     SDL_UpdateTexture(screen_texture, &screen_rect, pixels, width * 4);
     SDL_RenderCopy(renderer, screen_texture, NULL, NULL);
 
-    for (u32 i=0; i<array_count(data); i++) {
-      RenderData *item = data + i;
+    for (u32 tile_index=0; tile_index<array_count(data); tile_index++) {
+      RenderData *item = data + tile_index;
 
       float scale_x = ((float)window_width / (float)width);
       float scale_y = ((float)window_height / (float)height);
