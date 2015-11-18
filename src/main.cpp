@@ -552,10 +552,10 @@ void render(void *data) {
 
       for (int sy=0; sy<2; sy++) {
         for (int sx=0; sx<2; sx++) {
-          double r1=2*random_double(), dx=r1<1 ? glm::sqrt(r1)-1: 1-glm::sqrt(2-r1);
-          double r2=2*random_double(), dy=r2<1 ? glm::sqrt(r2)-1: 1-glm::sqrt(2-r2);
+          double dx = ((double)sx + 0.5)/2.0;
+          double dy = ((double)sy + 0.5)/2.0;
 
-          Ray ray = get_camera_ray(camera, (sx + 0.5 + dx) / 2.0 + x - 0.5, (sy + 0.5 + dy) / 2.0 + y - 0.5);
+          Ray ray = get_camera_ray(camera, x - 0.5 + dx, y - 0.5 + dy);
 
           for (int s=0; s<samps; s++) {
             dvec3 ray_color = radiance(world, ray, max_bounces);
