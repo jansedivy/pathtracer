@@ -12,11 +12,10 @@ struct Queue {
   u32 volatile completion_count;
   u32 volatile completion_goal;
 
-  u32 capacity;
-  u32 worker_count;
+  u16 capacity;
+  u16 worker_count;
 
   WorkEntry *entries;
-
   SDL_sem *semaphore;
 };
 

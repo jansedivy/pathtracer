@@ -21,10 +21,12 @@
 #include "stb_image_write.h"
 
 typedef uint8_t u8;
+typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
 typedef int8_t s8;
+typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
@@ -500,7 +502,17 @@ inline int to_int(double x) {
   return int(pow(glm::clamp(x, 0.0, 1.0), 1 / 2.2) * 255 + .5);
 }
 
-void export_image(dvec3 *colors, int width, int height) {
+char *mprintf(const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  char *data;
+  vasprintf(&data, format, args);
+  va_end(args);
+
+  return data;
+}
+
+void export_image(char *name, dvec3 *colors, int width, int height) {
   u8 *dst = (u8 *)malloc(4 * width * height);
 
   for (int i=0; i<width*height; i++) {
@@ -510,7 +522,9 @@ void export_image(dvec3 *colors, int width, int height) {
     dst[i * 4 + 3] = 255;
   }
 
-  stbi_write_png("../../../image.png", width, height, 4, dst, width * 4);
+  char *path = mprintf("../../../%s.png", name);
+  stbi_write_png(path, width, height, 4, dst, width * 4);
+  free(path);
 
   free(dst);
 }
@@ -559,18 +573,18 @@ void render(void *data) {
 }
 
 int main(int argc, char *argv[]) {
-  std::srand(std::time(0));
+  std::srand(0);
   int width = 512;
   int height = width * (4.0 / 4.0);
-  int max_bounces = 10;
-  int samps = 1000;
+  int max_bounces = 5;
+  int samps = 2000;
 
   float aspect = (float)height / (float)width;
 
   chdir(SDL_GetBasePath());
 
   Queue main_queue = {};
-  initialize_queue(&main_queue, 64);
+  initialize_queue(&main_queue, 128);
   create_workers(&main_queue, SDL_GetCPUCount());
 
   u8 *pixels = (u8 *)malloc(width * height * 4);
@@ -588,10 +602,13 @@ int main(int argc, char *argv[]) {
   camera.width = width;
   camera.height = height;
 
-  u32 tile_count_x = 7;
+  u32 tile_count_x = 8;
   u32 tile_count_y = 8;
 
   RenderData data[tile_count_x * tile_count_y];
+
+  u64 start = get_performance_counter();
+
   u32 tile_width = width / tile_count_x;
   u32 tile_height = height / tile_count_y;
 
@@ -626,7 +643,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  for (u32 i=0; i<array_count(data); i++) {
+  for (u32 i=0; i<count; i++) {
     add_work(&main_queue, render, data + i);
   }
 
@@ -694,7 +711,12 @@ int main(int argc, char *argv[]) {
     }
 
     if (!image_exported && main_queue.completion_goal == main_queue.completion_count) {
-      export_image(colors, width, height);
+      u64 end = get_performance_counter();
+      float time = (float)((end - start) / get_performance_frequency());
+
+      char *name = mprintf("image_%d_%d_%dx%d %.2fs", samps, max_bounces, width, height, time);
+      export_image(name, colors, width, height);
+      free(name);
       image_exported = true;
     }
 
