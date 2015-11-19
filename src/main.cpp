@@ -1,13 +1,10 @@
-#include <math.h>
 #include <stdlib.h>
 #include <time.h>
 #include <stdio.h>
 #include <random>
 
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/intersect.hpp>
-#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <assimp/Importer.hpp>
@@ -17,7 +14,6 @@
 #include <SDL2/SDL.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-
 #include "stb_image_write.h"
 
 typedef uint8_t u8;
@@ -30,11 +26,10 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
-using glm::dvec3;
-using glm::dmat4;
-using glm::dvec4;
+using glm::vec3;
+using glm::mat4;
 
-static double TAU = 2.0 * glm::pi<double>();
+static float TAU = 2.0f * glm::pi<float>();
 
 #define array_count(arr) (sizeof(arr) / sizeof(arr[0]))
 
@@ -42,8 +37,8 @@ static double TAU = 2.0 * glm::pi<double>();
 #include "array.h"
 
 struct AABB {
-  dvec3 min;
-  dvec3 max;
+  vec3 min;
+  vec3 max;
 };
 
 enum Material {
@@ -70,8 +65,8 @@ struct Mesh {
 
 struct Model {
   Mesh mesh;
-  dvec3 color;
-  dvec3 emission;
+  vec3 color;
+  vec3 emission;
   Material material;
 };
 
@@ -111,28 +106,14 @@ void load_model_work(World *world, const char *path) {
   Assimp::Importer importer;
 
   const aiScene* scene = importer.ReadFile(path, aiProcess_GenNormals |
-      aiProcess_CalcTangentSpace |
       aiProcess_Triangulate |
-      aiProcess_JoinIdenticalVertices |
-      aiProcess_OptimizeGraph |
-      aiProcess_SortByPType);
-
-  float max_distance = 0.0f;
-  AABB bounds;
-  bounds.min.x = DBL_MAX;
-  bounds.min.y = DBL_MAX;
-  bounds.min.z = DBL_MAX;
-  bounds.max.x = DBL_MIN;
-  bounds.max.y = DBL_MIN;
-  bounds.max.z = DBL_MIN;
+      aiProcess_JoinIdenticalVertices);
 
   if (scene->HasMeshes()) {
     for (u32 i=0; i<scene->mNumMeshes; i++) {
-      u32 count = 0;
-      u32 index_count = 0;
-
       aiMesh *mesh_data = scene->mMeshes[i];
-      count += mesh_data->mNumVertices;
+
+      u32 index_count = 0;
 
       for (u32 l=0; l<mesh_data->mNumFaces; l++) {
         aiFace face = mesh_data->mFaces[l];
@@ -142,21 +123,22 @@ void load_model_work(World *world, const char *path) {
 
       Model model;
       model.material = DIFF;
+      model.mesh.bounds.min = vec3(FLT_MAX);
+      model.mesh.bounds.max = vec3(FLT_MIN);
 
       aiMaterial *material = scene->mMaterials[mesh_data->mMaterialIndex];
 
       aiColor4D diffuse;
-      aiColor4D emissive;
-
       if (aiGetMaterialColor(material, AI_MATKEY_COLOR_DIFFUSE, &diffuse) == AI_SUCCESS) {
-        model.color = dvec3(diffuse.r, diffuse.g, diffuse.b);
+        model.color = vec3(diffuse.r, diffuse.g, diffuse.b);
       }
 
+      aiColor4D emissive;
       if (aiGetMaterialColor(material, AI_MATKEY_COLOR_EMISSIVE, &emissive) == AI_SUCCESS) {
-        model.emission = dvec3(emissive.r, emissive.g, emissive.b);
+        model.emission = vec3(emissive.r, emissive.g, emissive.b);
       }
 
-      u32 vertices_count = count * 3;
+      u32 vertices_count = mesh_data->mNumVertices * 3;
       u32 normals_count = vertices_count;
       u32 uv_count = 0;
       u32 indices_count = index_count;
@@ -175,17 +157,12 @@ void load_model_work(World *world, const char *path) {
 #define FIND_MIN(a, b) if ((a) < (b)) { (b) = (a); }
 #define FIND_MAX(a, b) if ((a) > (b)) { (b) = (a); }
 
-        FIND_MIN(mesh_data->mVertices[l].x, bounds.min.x);
-        FIND_MIN(mesh_data->mVertices[l].y, bounds.min.y);
-        FIND_MIN(mesh_data->mVertices[l].z, bounds.min.z);
-        FIND_MAX(mesh_data->mVertices[l].x, bounds.max.x);
-        FIND_MAX(mesh_data->mVertices[l].y, bounds.max.y);
-        FIND_MAX(mesh_data->mVertices[l].z, bounds.max.z);
-
-        float new_distance = glm::length(dvec3(mesh_data->mVertices[l].x, mesh_data->mVertices[l].y, mesh_data->mVertices[l].z));
-        if (new_distance > max_distance) {
-          max_distance = new_distance;
-        }
+        FIND_MIN(mesh_data->mVertices[l].x, model.mesh.bounds.min.x);
+        FIND_MIN(mesh_data->mVertices[l].y, model.mesh.bounds.min.y);
+        FIND_MIN(mesh_data->mVertices[l].z, model.mesh.bounds.min.z);
+        FIND_MAX(mesh_data->mVertices[l].x, model.mesh.bounds.max.x);
+        FIND_MAX(mesh_data->mVertices[l].y, model.mesh.bounds.max.y);
+        FIND_MAX(mesh_data->mVertices[l].z, model.mesh.bounds.max.z);
 
         model.mesh.normals[normals_index++] = mesh_data->mNormals[l].x;
         model.mesh.normals[normals_index++] = mesh_data->mNormals[l].y;
@@ -200,59 +177,45 @@ void load_model_work(World *world, const char *path) {
         }
       }
 
-      model.mesh.bounds = bounds;
       push_back(world->models, model);
     }
   }
 }
 
 struct Ray {
-  dvec3 origin;
-  dvec3 direction;
+  vec3 origin;
+  vec3 direction;
 };
 
-inline double random_double() {
-  return (double)std::rand() / (double)RAND_MAX;
+inline float random_float() {
+  return (float)std::rand() / (float)RAND_MAX;
 }
 
 struct HitResult {
   bool hit;
-  dvec3 position;
-  dvec3 normal;
-  dvec3 color;
-  dvec3 emission;
+  vec3 position;
+  vec3 normal;
+  vec3 color;
+  vec3 emission;
   Material material;
-  double distance;
+  float distance;
 };
 
 bool aabb_intersection(AABB b, Ray r) {
-  dvec3 dirfrac;
-  dirfrac.x = 1.0 / r.direction.x;
-  dirfrac.y = 1.0 / r.direction.y;
-  dirfrac.z = 1.0 / r.direction.z;
+  vec3 min = (b.min - r.origin) / r.direction;
+  vec3 max = (b.max - r.origin) / r.direction;
 
-  float t1 = (b.min.x - r.origin.x)*dirfrac.x;
-  float t2 = (b.max.x - r.origin.x)*dirfrac.x;
-  float t3 = (b.min.y - r.origin.y)*dirfrac.y;
-  float t4 = (b.max.y - r.origin.y)*dirfrac.y;
-  float t5 = (b.min.z - r.origin.z)*dirfrac.z;
-  float t6 = (b.max.z - r.origin.z)*dirfrac.z;
+  float tmin = glm::max(glm::max(glm::min(min.x, max.x), glm::min(min.y, max.y)), glm::min(min.z, max.z));
+  float tmax = glm::min(glm::min(glm::max(min.x, max.x), glm::max(min.y, max.y)), glm::max(min.z, max.z));
 
-  float tmin = glm::max(glm::max(glm::min(t1, t2), glm::min(t3, t4)), glm::min(t5, t6));
-  float tmax = glm::min(glm::min(glm::max(t1, t2), glm::max(t3, t4)), glm::max(t5, t6));
-
-  double t;
-  if (tmax < 0) {
-    t = tmax;
+  if (tmax < 0.0) {
     return false;
   }
 
   if (tmin > tmax) {
-    t = tmax;
     return false;
   }
 
-  t = tmin;
   return true;
 }
 
@@ -264,12 +227,12 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
     return;
   }
 
-  dvec3 start = r.origin;
-  dvec3 direction = r.direction;
+  vec3 start = r.origin;
+  vec3 direction = r.direction;
 
-  double distance = DBL_MAX;
+  float distance = FLT_MAX;
 
-  dvec3 result_position;
+  vec3 result_position;
 
   u32 index;
   for (u32 i=0; i<model->mesh.indices_count; i += 3) {
@@ -277,17 +240,17 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
     int indices_b = model->mesh.indices[i + 1] * 3;
     int indices_c = model->mesh.indices[i + 2] * 3;
 
-    dvec3 a = dvec3(model->mesh.vertices[indices_a + 0],
-                    model->mesh.vertices[indices_a + 1],
-                    model->mesh.vertices[indices_a + 2]);
+    vec3 a = vec3(model->mesh.vertices[indices_a + 0],
+                  model->mesh.vertices[indices_a + 1],
+                  model->mesh.vertices[indices_a + 2]);
 
-    dvec3 b = dvec3(model->mesh.vertices[indices_b + 0],
-                    model->mesh.vertices[indices_b + 1],
-                    model->mesh.vertices[indices_b + 2]);
+    vec3 b = vec3(model->mesh.vertices[indices_b + 0],
+                  model->mesh.vertices[indices_b + 1],
+                  model->mesh.vertices[indices_b + 2]);
 
-    dvec3 c = dvec3(model->mesh.vertices[indices_c + 0],
-                    model->mesh.vertices[indices_c + 1],
-                    model->mesh.vertices[indices_c + 2]);
+    vec3 c = vec3(model->mesh.vertices[indices_c + 0],
+                  model->mesh.vertices[indices_c + 1],
+                  model->mesh.vertices[indices_c + 2]);
 
     if (glm::intersectRayTriangle(start, direction, a, b, c, result_position)) {
       if (result_position.z < distance) {
@@ -303,31 +266,35 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
     int indices_b = model->mesh.indices[index + 1] * 3;
     int indices_c = model->mesh.indices[index + 2] * 3;
 
-    dvec3 normal_a = dvec3(model->mesh.normals[indices_a + 0],
-                           model->mesh.normals[indices_a + 1],
-                           model->mesh.normals[indices_a + 2]);
+    vec3 normal_a = vec3(model->mesh.normals[indices_a + 0],
+                         model->mesh.normals[indices_a + 1],
+                         model->mesh.normals[indices_a + 2]);
 
-    dvec3 normal_b = dvec3(model->mesh.normals[indices_b + 0],
-                           model->mesh.normals[indices_b + 1],
-                           model->mesh.normals[indices_b + 2]);
+    vec3 normal_b = vec3(model->mesh.normals[indices_b + 0],
+                         model->mesh.normals[indices_b + 1],
+                         model->mesh.normals[indices_b + 2]);
 
-    dvec3 normal_c = dvec3(model->mesh.normals[indices_c + 0],
-                           model->mesh.normals[indices_c + 1],
-                           model->mesh.normals[indices_c + 2]);
+    vec3 normal_c = vec3(model->mesh.normals[indices_c + 0],
+                         model->mesh.normals[indices_c + 1],
+                         model->mesh.normals[indices_c + 2]);
+
     result->hit = true;
     result->position = r.origin + r.direction * distance;
-    result->normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0);
+    result->normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0f);
     result->color = model->color;
     result->emission = model->emission;
     result->material = model->material;
     result->distance = distance;
+    return;
   }
+
+  result->hit = false;
 }
 
 void intersect_all(HitResult *closest, World *world, const Ray &r) {
   HitResult hit;
   closest->hit = false;
-  double distance = DBL_MAX;
+  float distance = FLT_MAX;
 
   for (auto it = begin(world->models); it != end(world->models); it++) {
     intersect_model(&hit, it, r);
@@ -338,25 +305,25 @@ void intersect_all(HitResult *closest, World *world, const Ray &r) {
   }
 }
 
-dvec3 reflect(const dvec3 &value, const dvec3 &normal) {
-  return value - normal * 2.0 * glm::dot(normal, value);
+vec3 reflect(const vec3 &value, const vec3 &normal) {
+  return value - normal * 2.0f * glm::dot(normal, value);
 }
 
-dvec3 cosine_sample_hemisphere(double u1, double u2) {
-  double theta = TAU * u2;
-  double r = glm::sqrt(u1);
+vec3 cosine_sample_hemisphere(float u1, float u2) {
+  float theta = TAU * u2;
+  float r = glm::sqrt(u1);
 
-  double x = r * glm::cos(theta);
-  double y = r * glm::sin(theta);
+  float x = r * glm::cos(theta);
+  float y = r * glm::sin(theta);
 
-  return dvec3(x, y, glm::sqrt(glm::max(0.0, 1.0 - u1)));
+  return vec3(x, y, glm::sqrt(glm::max(0.0f, 1.0f - u1)));
 }
 
-dvec3 radiance(World *world, Ray ray, int max_bounces) {
+vec3 radiance(World *world, Ray ray, int max_bounces) {
   int depth_iteration = 0;
 
-  dvec3 color(0.0, 0.0, 0.0);
-  dvec3 reflectance(1.0, 1.0, 1.0);
+  vec3 color(0.0, 0.0, 0.0);
+  vec3 reflectance(1.0, 1.0, 1.0);
 
   HitResult hit;
   while (true) {
@@ -365,17 +332,17 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
       return color;
     }
 
-    dvec3 n = hit.normal;
-    dvec3 hit_position = hit.position;
-    dvec3 normal = glm::dot(n, ray.direction) < 0 ? n : n * -1.0;
-    dvec3 f = hit.color;
+    vec3 n = hit.normal;
+    vec3 hit_position = hit.position;
+    vec3 normal = glm::dot(n, ray.direction) < 0 ? n : n * -1.0f;
+    vec3 f = hit.color;
 
-    double p = f.x > f.y && f.x > f.z ? f.x : f.y > f.z ? f.y : f.z;
+    float p = f.x > f.y && f.x > f.z ? f.x : f.y > f.z ? f.y : f.z;
 
     color = color + reflectance * hit.emission;
 
     if (++depth_iteration > max_bounces) {
-      if (random_double() < p) {
+      if (random_float() < p) {
         f = f / p;
       } else {
         return color;
@@ -386,18 +353,18 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
 
     if (hit.material == DIFF) {
       // http://www.rorydriscoll.com/2009/01/07/better-sampling/
-      dvec3 sdir;
+      vec3 sdir;
       if (glm::abs(normal.x) > 0.1) {
-        sdir = glm::normalize(glm::cross(dvec3(0.0, 1.0, 0.0), normal));
+        sdir = glm::normalize(glm::cross(vec3(0.0, 1.0, 0.0), normal));
       } else {
-        sdir = glm::normalize(glm::cross(dvec3(1.0, 0.0, 0.0), normal));
+        sdir = glm::normalize(glm::cross(vec3(1.0, 0.0, 0.0), normal));
       }
 
-      dvec3 tdir = glm::cross(normal, sdir);
+      vec3 tdir = glm::cross(normal, sdir);
 
-      dvec3 sample = cosine_sample_hemisphere(random_double(), random_double());
+      vec3 sample = cosine_sample_hemisphere(random_float(), random_float());
 
-      dvec3 d = (sdir * sample.x + tdir * sample.y + normal * sample.z);
+      vec3 d = (sdir * sample.x + tdir * sample.y + normal * sample.z);
 
       ray.origin = hit_position;
       ray.direction = glm::normalize(d);
@@ -411,25 +378,25 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
       reflRay.origin = hit_position;
       reflRay.direction = reflect(ray.direction, n);
       bool into = glm::dot(n, normal) > 0.0;
-      double nc=1, nt=1.5, nnt=into?nc/nt:nt/nc, ddn=glm::dot(ray.direction, normal), cos2t;
+      float nc=1, nt=1.5, nnt=into?nc/nt:nt/nc, ddn=glm::dot(ray.direction, normal), cos2t;
       if ((cos2t=1-nnt*nnt*(1-ddn*ddn))<0){
         ray = reflRay;
         continue;
       }
 
-      dvec3 tdir = glm::normalize(ray.direction*nnt - n*((into?1:-1)*(ddn*nnt+glm::sqrt(cos2t))));
-      double a=nt-nc;
-      double b=nt+nc;
-      double R0=a*a/(b*b);
-      double c = 1-(into?-ddn:glm::dot(tdir, n));
+      vec3 tdir = glm::normalize(ray.direction*nnt - n*((into?1:-1)*(ddn*nnt+glm::sqrt(cos2t))));
+      float a=nt-nc;
+      float b=nt+nc;
+      float R0=a*a/(b*b);
+      float c = 1-(into?-ddn:glm::dot(tdir, n));
 
-      double Re=R0+(1-R0)*c*c*c*c*c;
-      double Tr=1-Re;
-      double P=.25+.5*Re;
-      double RP=Re/P;
-      double TP=Tr/(1-P);
+      float Re=R0+(1-R0)*c*c*c*c*c;
+      float Tr=1-Re;
+      float P=.25+.5*Re;
+      float RP=Re/P;
+      float TP=Tr/(1-P);
 
-      if (random_double() < P) {
+      if (random_float() < P) {
         reflectance = reflectance*RP;
         ray = reflRay;
       } else {
@@ -442,20 +409,20 @@ dvec3 radiance(World *world, Ray ray, int max_bounces) {
 }
 
 struct Camera {
-  dvec3 position;
-  glm::dmat4 view_matrix;
+  vec3 position;
+  glm::mat4 view_matrix;
   int width;
   int height;
 };
 
-Ray get_camera_ray(Camera *camera, double x, double y) {
-  dvec3 from = glm::unProject(
-      glm::dvec3(x, y, 0.0),
-      glm::dmat4(),
+Ray get_camera_ray(Camera *camera, float x, float y) {
+  vec3 from = glm::unProject(
+      glm::vec3(x, y, 0.0),
+      glm::mat4(),
       camera->view_matrix,
-      glm::dvec4(0.0, 0.0, camera->width, camera->height));
+      glm::vec4(0.0f, 0.0f, camera->width, camera->height));
 
-  dvec3 direction = glm::normalize(from - camera->position);
+  vec3 direction = glm::normalize(from - camera->position);
 
   Ray ray;
   ray.origin = from;
@@ -485,7 +452,7 @@ struct RenderData {
   int index_y;
 
   Camera *camera;
-  dvec3 *colors;
+  vec3 *colors;
   RenderTileState::RenderTileState state;
   World *world;
 };
@@ -498,8 +465,8 @@ u64 get_performance_frequency() {
   return SDL_GetPerformanceFrequency();
 }
 
-inline int to_int(double x) {
-  return int(pow(glm::clamp(x, 0.0, 1.0), 1 / 2.2) * 255 + .5);
+inline int to_int(float x) {
+  return int(glm::pow(glm::clamp(x, 0.0f, 1.0f), 1.0f / 2.2f) * 255 + 0.5f);
 }
 
 char *mprintf(const char *format, ...) {
@@ -512,7 +479,7 @@ char *mprintf(const char *format, ...) {
   return data;
 }
 
-void export_image(char *name, dvec3 *colors, int width, int height) {
+void export_image(char *name, vec3 *colors, int width, int height) {
   u8 *dst = (u8 *)malloc(4 * width * height);
 
   for (int i=0; i<width*height; i++) {
@@ -538,7 +505,7 @@ void render(void *data) {
   int samps = work->samps;
   int max_bounces = work->max_bounces;
   Camera *camera = work->camera;
-  dvec3 *colors = work->colors;
+  vec3 *colors = work->colors;
   int width = camera->width;
   int height = camera->height;
   World *world = work->world;
@@ -548,23 +515,23 @@ void render(void *data) {
   for (int y=min_y; y<max_y; y++) {
     for (int x=min_x; x<max_x; x++) {
       int i = (height - y - 1) * width + x;
-      dvec3 pixel_color = dvec3(0.0);
+      vec3 pixel_color = vec3(0.0);
 
       for (int sy=0; sy<2; sy++) {
         for (int sx=0; sx<2; sx++) {
-          double dx = ((double)sx + 0.5)/2.0;
-          double dy = ((double)sy + 0.5)/2.0;
+          float dx = ((float)sx + 0.5)/2.0;
+          float dy = ((float)sy + 0.5)/2.0;
 
-          Ray ray = get_camera_ray(camera, x - 0.5 + dx, y - 0.5 + dy);
+          Ray ray = get_camera_ray(camera, x - 0.5f + dx, y - 0.5f + dy);
 
           for (int s=0; s<samps; s++) {
-            dvec3 ray_color = radiance(world, ray, max_bounces);
-            pixel_color = pixel_color + ray_color * (1.0 / samps);
+            vec3 ray_color = radiance(world, ray, max_bounces);
+            pixel_color = pixel_color + ray_color * (1.0f / samps);
           }
         }
       }
 
-      dvec3 final_pixel_color = glm::clamp((pixel_color / 4.0), dvec3(0.0), dvec3(1.0));
+      vec3 final_pixel_color = glm::clamp((pixel_color / 4.0f), vec3(0.0), vec3(1.0));
       colors[i] += final_pixel_color;
     }
   }
@@ -573,9 +540,9 @@ void render(void *data) {
 }
 
 int main(int argc, char *argv[]) {
-  std::srand(0);
+  std::srand(std::time(NULL));
   int width = 512;
-  int height = width * (4.0 / 4.0);
+  int height = width * (4.0f / 4.0f);
   int max_bounces = 5;
   int samps = 2000;
 
@@ -593,12 +560,12 @@ int main(int argc, char *argv[]) {
 
   load_model_work(&world, "box.obj");
 
-  dvec3 *colors = new dvec3[width * height];
+  vec3 *colors = new vec3[width * height];
 
   Camera camera;
-  camera.position = dvec3(0.0, 1.0, 3.00);
-  camera.view_matrix = glm::perspective(glm::radians(50.0), (double)width / (double)height, 0.1, 1000.0);
-  camera.view_matrix = glm::translate(camera.view_matrix, (camera.position * -1.0));
+  camera.position = vec3(0.0, 1.0, 3.00);
+  camera.view_matrix = glm::perspective(glm::radians(50.0f), (float)width / (float)height, 0.1f, 1000.0f);
+  camera.view_matrix = glm::translate(camera.view_matrix, (camera.position * -1.0f));
   camera.width = width;
   camera.height = height;
 
@@ -712,7 +679,7 @@ int main(int argc, char *argv[]) {
 
     if (!image_exported && main_queue.completion_goal == main_queue.completion_count) {
       u64 end = get_performance_counter();
-      float time = (float)((end - start) / get_performance_frequency());
+      float time = (float)((end - start) / (float)get_performance_frequency());
 
       char *name = mprintf("image_%d_%d_%dx%d %.2fs", samps, max_bounces, width, height, time);
       export_image(name, colors, width, height);
