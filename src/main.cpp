@@ -279,12 +279,12 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
                          model->mesh.normals[indices_c + 2]);
 
     result->hit = true;
-    result->position = r.origin + r.direction * distance;
+    result->position = r.origin + r.direction * (distance - 1e-4f);
     result->normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0f);
     result->color = model->color;
     result->emission = model->emission;
     result->material = model->material;
-    result->distance = distance;
+    result->distance = (distance - 1e-4f);
     return;
   }
 
@@ -404,6 +404,7 @@ vec3 radiance(World *world, Ray ray, int max_bounces) {
         ray.origin = hit_position;
         ray.direction = tdir;
       }
+      continue;
     }
   }
 }
