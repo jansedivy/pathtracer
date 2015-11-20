@@ -540,12 +540,25 @@ void render(void *data) {
   work->state = RenderTileState::DONE;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char **argv) {
   std::srand(std::time(NULL));
   int width = 512;
   int height = width * (4.0f / 4.0f);
-  int max_bounces = 5;
-  int samps = 2000;
+  int max_bounces = 1;
+  int samps = 20;
+  char *model_file = (char *)"box.obj";
+
+  if (argc > 1) {
+    samps = atoi(argv[1]);
+  }
+
+  if (argc > 2) {
+    max_bounces = atoi(argv[2]);
+  }
+
+  if (argc > 3) {
+    model_file = argv[3];
+  }
 
   float aspect = (float)height / (float)width;
 
@@ -559,7 +572,7 @@ int main(int argc, char *argv[]) {
 
   World world;
 
-  load_model_work(&world, "box.obj");
+  load_model_work(&world, model_file);
 
   vec3 *colors = new vec3[width * height];
 
