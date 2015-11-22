@@ -2,7 +2,7 @@
 
 ![preview](https://cldup.com/dZLX9rG4Ou.png)
 
-![preview](https://cldup.com/p3JVNWIT1Q.png)
+![preview](https://cldup.com/Wf52i0JHlV.png)
 
 ## Features
 
