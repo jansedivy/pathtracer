@@ -34,7 +34,7 @@ static float TAU = 2.0f * glm::pi<float>();
 #define array_count(arr) (sizeof(arr) / sizeof(arr[0]))
 
 #include "queue.h"
-#include "array.h"
+#include <base/array.h>
 
 struct AABB {
   vec3 min;
@@ -177,7 +177,7 @@ void load_model_work(World *world, const char *path) {
         }
       }
 
-      push_back(world->models, model);
+      array::push_back(world->models, model);
     }
   }
 }
@@ -296,7 +296,7 @@ void intersect_all(HitResult *closest, World *world, const Ray &r) {
   closest->hit = false;
   float distance = FLT_MAX;
 
-  for (auto it = begin(world->models); it != end(world->models); it++) {
+  for (auto it = array::begin(world->models); it != array::end(world->models); it++) {
     intersect_model(&hit, it, r);
     if (hit.hit && hit.distance < distance) {
       *closest = hit;

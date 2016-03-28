@@ -17,6 +17,7 @@ libraries="
 
   -I./libs/stb
   -I./libs/glm
+  -I./libs/base
 
   -F./build/$app_name/Contents/Frameworks
   -rpath @executable_path/../Frameworks
