@@ -393,12 +393,13 @@ bool aabb_intersection(AABB b, Ray r) {
   vec3 min = (b.min - r.origin) * r.inv;
   vec3 max = (b.max - r.origin) * r.inv;
 
-  float tmin = glm::max(glm::max(glm::min(min.x, max.x), glm::min(min.y, max.y)), glm::min(min.z, max.z));
   float tmax = glm::min(glm::min(glm::max(min.x, max.x), glm::max(min.y, max.y)), glm::max(min.z, max.z));
 
   if (tmax < 0.0) {
     return false;
   }
+
+  float tmin = glm::max(glm::max(glm::min(min.x, max.x), glm::min(min.y, max.y)), glm::min(min.z, max.z));
 
   if (tmin > tmax) {
     return false;
