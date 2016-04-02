@@ -580,10 +580,10 @@ void render(void *data) {
 
 int main(int argc, char **argv) {
   std::srand(std::time(NULL));
-  int width = 512;
-  int height = width * (4.0f / 4.0f);
-  int max_bounces = 1;
-  int samps = 20;
+  int width = 256;
+  int height = width * (9.0f / 16.0f);
+  int max_bounces = 4;
+  int samps = 130;
   char *model_file = (char *)"box.obj";
 
   if (argc > 1) {
