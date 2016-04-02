@@ -36,6 +36,22 @@ static float TAU = 2.0f * glm::pi<float>();
 #include "queue.h"
 #include <base/array.h>
 
+struct RandomSequence {
+  int seed;
+};
+
+int get_next_random(RandomSequence *random) {
+  int seed = (random->seed * 1103515245U + 12345U) & 0x7fffffffU;
+  random->seed = seed;
+  return seed;
+}
+
+float random_float(RandomSequence *random) {
+  int value = get_next_random(random);
+
+  return (float)value / 0x7fffffffU;
+}
+
 struct AABB {
   vec3 min;
   vec3 max;
@@ -187,10 +203,6 @@ struct Ray {
   vec3 direction;
 };
 
-inline float random_float() {
-  return (float)std::rand() / (float)RAND_MAX;
-}
-
 struct HitResult {
   bool hit;
   vec3 position;
@@ -319,7 +331,7 @@ vec3 cosine_sample_hemisphere(float u1, float u2) {
   return vec3(x, y, glm::sqrt(glm::max(0.0f, 1.0f - u1)));
 }
 
-vec3 radiance(World *world, Ray ray, int max_bounces) {
+vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
   int depth_iteration = 0;
 
   vec3 color(0.0, 0.0, 0.0);
@@ -342,7 +354,7 @@ vec3 radiance(World *world, Ray ray, int max_bounces) {
     color = color + reflectance * hit.emission;
 
     if (++depth_iteration > max_bounces) {
-      if (random_float() < p) {
+      if (random_float(random) < p) {
         f = f / p;
       } else {
         return color;
@@ -362,7 +374,7 @@ vec3 radiance(World *world, Ray ray, int max_bounces) {
 
       vec3 tdir = glm::cross(normal, sdir);
 
-      vec3 sample = cosine_sample_hemisphere(random_float(), random_float());
+      vec3 sample = cosine_sample_hemisphere(random_float(random), random_float(random));
 
       vec3 d = (sdir * sample.x + tdir * sample.y + normal * sample.z);
 
@@ -396,7 +408,7 @@ vec3 radiance(World *world, Ray ray, int max_bounces) {
       float RP=Re/P;
       float TP=Tr/(1-P);
 
-      if (random_float() < P) {
+      if (random_float(random) < P) {
         reflectance = reflectance*RP;
         ray = reflRay;
       } else {
@@ -451,6 +463,7 @@ struct RenderData {
 
   int index_x;
   int index_y;
+  RandomSequence random;
 
   Camera *camera;
   vec3 *colors;
@@ -510,6 +523,7 @@ void render(void *data) {
   int width = camera->width;
   int height = camera->height;
   World *world = work->world;
+  RandomSequence random = work->random;
 
   work->state = RenderTileState::RENDERING;
 
@@ -526,7 +540,7 @@ void render(void *data) {
           Ray ray = get_camera_ray(camera, x - 0.5f + dx, y - 0.5f + dy);
 
           for (int s=0; s<samps; s++) {
-            vec3 ray_color = radiance(world, ray, max_bounces);
+            vec3 ray_color = radiance(world, ray, max_bounces, &random);
             pixel_color = pixel_color + ray_color * (1.0f / samps);
           }
         }
@@ -600,6 +614,7 @@ int main(int argc, char **argv) {
     for (u32 x=tile_start_x; x<tile_count_x; x++) {
       RenderData *item = data + count++;
 
+      item->random.seed = count;
       item->index_x = x;
       item->index_y = y;
       item->min_x = x * tile_width;
