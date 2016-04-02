@@ -28,6 +28,7 @@ typedef int32_t s32;
 typedef int64_t s64;
 
 using glm::vec3;
+using glm::vec4;
 using glm::mat4;
 
 static float TAU = 2.0f * glm::pi<float>();
@@ -671,16 +672,24 @@ struct Camera {
   vec3 position;
   vec3 rotation;
   glm::mat4 view_matrix;
+  glm::mat4 inverse;
   int width;
   int height;
 };
 
 Ray get_camera_ray(Camera *camera, float x, float y) {
-  vec3 from = glm::unProject(
-      glm::vec3(x, y, 0.0),
-      glm::mat4(),
-      camera->view_matrix,
-      glm::vec4(0.0f, 0.0f, camera->width, camera->height));
+  vec4 tmp;
+  tmp.x = x / (float)camera->width;
+  tmp.y = y / (float)camera->height;
+  tmp.z = 0.0f;
+  tmp.w = 1.0f;
+
+  tmp = tmp * 2.0f - 1.0f;
+
+  vec4 obj = camera->inverse * tmp;
+  obj /= obj.w;
+
+  vec3 from = vec3(obj);
 
   vec3 direction = glm::normalize(from - camera->position);
 
@@ -847,6 +856,7 @@ int main(int argc, char **argv) {
   camera.view_matrix = glm::rotate(camera.view_matrix, camera.rotation.y, vec3(0.0, 1.0, 0.0));
   camera.view_matrix = glm::rotate(camera.view_matrix, camera.rotation.z, vec3(0.0, 0.0, 1.0));
   camera.view_matrix = glm::translate(camera.view_matrix, (camera.position * -1.0f));
+  camera.inverse = glm::inverse(camera.view_matrix);
   camera.width = width;
   camera.height = height;
 
