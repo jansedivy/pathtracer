@@ -57,7 +57,7 @@ struct AABB {
   vec3 max;
 };
 
-enum Material {
+enum MaterialType {
   DIFF,
   REFR,
   REFL
@@ -68,36 +68,36 @@ struct Mesh {
 
   float *vertices = NULL;
   float *normals = NULL;
-  float *uv = NULL;
   int *indices = NULL;
 
   u32 vertices_count = 0;
   u32 normals_count = 0;
-  u32 uv_count = 0;
   u32 indices_count = 0;
 
   AABB bounds;
 };
 
-struct Model {
-  Mesh mesh;
+struct Material {
   vec3 color;
   vec3 emission;
-  Material material;
+  MaterialType type;
 };
 
-void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indices_count, u32 uv_count) {
+struct Model {
+  Mesh mesh;
+  uint32_t material_index;
+};
+
+void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indices_count) {
   u32 vertices_size = vertices_count * sizeof(float);
   u32 normals_size = normals_count * sizeof(float);
   u32 indices_size = indices_count * sizeof(int);
-  u32 uv_size = uv_count * sizeof(float);
 
-  u8 *data = static_cast<u8*>(malloc(vertices_size + normals_size + indices_size + uv_size));
+  u8 *data = static_cast<u8*>(malloc(vertices_size + normals_size + indices_size));
 
   float *vertices = (float*)data;
   float *normals = (float*)(data + vertices_size);
   int *indices = (int*)(data + vertices_size + normals_size);
-  float *uv = (float*)(data + vertices_size + normals_size + indices_size);
 
   mesh->data = data;
 
@@ -109,13 +109,11 @@ void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indice
 
   mesh->indices = indices;
   mesh->indices_count = indices_count;
-
-  mesh->uv = uv;
-  mesh->uv_count = uv_count;
 }
 
 struct World {
   Array<Model> models;
+  Array<Material> materials;
 };
 
 void load_model_work(World *world, const char *path) {
@@ -124,6 +122,24 @@ void load_model_work(World *world, const char *path) {
   const aiScene* scene = importer.ReadFile(path, aiProcess_GenNormals |
       aiProcess_Triangulate |
       aiProcess_JoinIdenticalVertices);
+
+  for (u32 i=0; i<scene->mNumMaterials; i++) {
+    aiMaterial *material = scene->mMaterials[i];
+
+    Material model_material;
+    model_material.type = DIFF;
+    aiColor4D diffuse;
+    if (aiGetMaterialColor(material, AI_MATKEY_COLOR_DIFFUSE, &diffuse) == AI_SUCCESS) {
+      model_material.color = vec3(diffuse.r, diffuse.g, diffuse.b);
+    }
+
+    aiColor4D emissive;
+    if (aiGetMaterialColor(material, AI_MATKEY_COLOR_EMISSIVE, &emissive) == AI_SUCCESS) {
+      model_material.emission = vec3(emissive.r, emissive.g, emissive.b);
+    }
+
+    array::push_back(world->materials, model_material);
+  }
 
   if (scene->HasMeshes()) {
     for (u32 i=0; i<scene->mNumMeshes; i++) {
@@ -138,32 +154,19 @@ void load_model_work(World *world, const char *path) {
       }
 
       Model model;
-      model.material = DIFF;
+      model.material_index = mesh_data->mMaterialIndex;
       model.mesh.bounds.min = vec3(FLT_MAX);
       model.mesh.bounds.max = vec3(FLT_MIN);
 
-      aiMaterial *material = scene->mMaterials[mesh_data->mMaterialIndex];
-
-      aiColor4D diffuse;
-      if (aiGetMaterialColor(material, AI_MATKEY_COLOR_DIFFUSE, &diffuse) == AI_SUCCESS) {
-        model.color = vec3(diffuse.r, diffuse.g, diffuse.b);
-      }
-
-      aiColor4D emissive;
-      if (aiGetMaterialColor(material, AI_MATKEY_COLOR_EMISSIVE, &emissive) == AI_SUCCESS) {
-        model.emission = vec3(emissive.r, emissive.g, emissive.b);
-      }
-
       u32 vertices_count = mesh_data->mNumVertices * 3;
       u32 normals_count = vertices_count;
-      u32 uv_count = 0;
       u32 indices_count = index_count;
 
       u32 vertices_index = 0;
       u32 normals_index = 0;
       u32 indices_index = 0;
 
-      allocate_mesh(&model.mesh, vertices_count, normals_count, indices_count, uv_count);
+      allocate_mesh(&model.mesh, vertices_count, normals_count, indices_count);
 
       for (u32 l=0; l<mesh_data->mNumVertices; l++) {
         model.mesh.vertices[vertices_index++] = mesh_data->mVertices[l].x;
@@ -204,13 +207,9 @@ struct Ray {
 };
 
 struct HitResult {
-  bool hit;
-  vec3 position;
-  vec3 normal;
-  vec3 color;
-  vec3 emission;
-  Material material;
   float distance;
+  vec3 normal;
+  uint32_t material_index;
 };
 
 bool aabb_intersection(AABB b, Ray r) {
@@ -231,20 +230,59 @@ bool aabb_intersection(AABB b, Ray r) {
   return true;
 }
 
+bool intersect_triangle(vec3 v0, vec3 v1, vec3 v2, const Ray &r, float *result_distance) {
+  static float Epsilon = std::numeric_limits<float>::epsilon();
+
+  vec3 e1 = v1 - v0;
+  vec3 e2 = v2 - v0;
+
+  vec3 p = glm::cross(r.direction, e2);
+
+  float a = glm::dot(e1, p);
+
+  if (a > -Epsilon && a < Epsilon) {
+    return false;
+  }
+
+  float inv_det = 1.0f / a;
+
+  vec3 s = r.origin - v0;
+
+  float u = glm::dot(s, p) * inv_det;
+
+  if (u < 0.0f || u > 1.0f) {
+    return false;
+  }
+
+  vec3 q = glm::cross(s, e1);
+
+  float v = glm::dot(r.direction, q) * inv_det;
+
+  if (v < 0.0f || u + v > 1.0f) {
+    return false;
+  }
+
+  float t = glm::dot(e2, q) * inv_det;
+
+  if (t > Epsilon) {
+    *result_distance = t;
+    return true;
+  }
+
+  return false;
+}
+
 void intersect_model(HitResult *result, Model *model, const Ray &r) {
   bool hit = false;
 
   if (!aabb_intersection(model->mesh.bounds, r)) {
-    result->hit = false;
+    result->distance = FLT_MAX;
     return;
   }
 
-  vec3 start = r.origin;
-  vec3 direction = r.direction;
-
   float distance = FLT_MAX;
 
-  vec3 result_position;
+  float result_distance;
 
   u32 index;
   for (u32 i=0; i<model->mesh.indices_count; i += 3) {
@@ -252,22 +290,14 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
     int indices_b = model->mesh.indices[i + 1] * 3;
     int indices_c = model->mesh.indices[i + 2] * 3;
 
-    vec3 a = vec3(model->mesh.vertices[indices_a + 0],
-                  model->mesh.vertices[indices_a + 1],
-                  model->mesh.vertices[indices_a + 2]);
+    vec3 a = *(vec3 *)(model->mesh.vertices + indices_a);
+    vec3 b = *(vec3 *)(model->mesh.vertices + indices_b);
+    vec3 c = *(vec3 *)(model->mesh.vertices + indices_c);
 
-    vec3 b = vec3(model->mesh.vertices[indices_b + 0],
-                  model->mesh.vertices[indices_b + 1],
-                  model->mesh.vertices[indices_b + 2]);
-
-    vec3 c = vec3(model->mesh.vertices[indices_c + 0],
-                  model->mesh.vertices[indices_c + 1],
-                  model->mesh.vertices[indices_c + 2]);
-
-    if (glm::intersectRayTriangle(start, direction, a, b, c, result_position)) {
-      if (result_position.z < distance) {
+    if (intersect_triangle(a, b, c, r, &result_distance)) {
+      if (result_distance < distance) {
         index = i;
-        distance = result_position.z;
+        distance = result_distance;
         hit = true;
       }
     }
@@ -278,43 +308,34 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
     int indices_b = model->mesh.indices[index + 1] * 3;
     int indices_c = model->mesh.indices[index + 2] * 3;
 
-    vec3 normal_a = vec3(model->mesh.normals[indices_a + 0],
-                         model->mesh.normals[indices_a + 1],
-                         model->mesh.normals[indices_a + 2]);
+    vec3 normal_a = *(vec3 *)(model->mesh.normals + indices_a);
+    vec3 normal_b = *(vec3 *)(model->mesh.normals + indices_b);
+    vec3 normal_c = *(vec3 *)(model->mesh.normals + indices_c);
 
-    vec3 normal_b = vec3(model->mesh.normals[indices_b + 0],
-                         model->mesh.normals[indices_b + 1],
-                         model->mesh.normals[indices_b + 2]);
-
-    vec3 normal_c = vec3(model->mesh.normals[indices_c + 0],
-                         model->mesh.normals[indices_c + 1],
-                         model->mesh.normals[indices_c + 2]);
-
-    result->hit = true;
-    result->position = r.origin + r.direction * (distance - 1e-4f);
     result->normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0f);
-    result->color = model->color;
-    result->emission = model->emission;
-    result->material = model->material;
+    result->material_index = model->material_index;
     result->distance = (distance - 1e-4f);
     return;
   }
 
-  result->hit = false;
+  result->distance = FLT_MAX;
 }
 
 void intersect_all(HitResult *closest, World *world, const Ray &r) {
+  HitResult result;
+
   HitResult hit;
-  closest->hit = false;
   float distance = FLT_MAX;
 
   for (auto it = array::begin(world->models); it != array::end(world->models); it++) {
     intersect_model(&hit, it, r);
-    if (hit.hit && hit.distance < distance) {
-      *closest = hit;
+    if (hit.distance != FLT_MAX && hit.distance < distance) {
+      result = hit;
       distance = hit.distance;
     }
   }
+
+  *closest = result;
 }
 
 vec3 reflect(const vec3 &value, const vec3 &normal) {
@@ -340,18 +361,21 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
   HitResult hit;
   while (true) {
     intersect_all(&hit, world, ray);
-    if (!hit.hit) {
-      return color;
+    if (hit.distance == FLT_MAX) {
+      return color + vec3(0.7, 0.7, 0.8)/20.0f * reflectance;
     }
 
     vec3 n = hit.normal;
-    vec3 hit_position = hit.position;
+    vec3 hit_position = ray.origin + ray.direction * (hit.distance - 1e-4f);
     vec3 normal = glm::dot(n, ray.direction) < 0 ? n : n * -1.0f;
-    vec3 f = hit.color;
+
+    Material material = world->materials[hit.material_index];
+
+    vec3 f = material.color;
 
     float p = f.x > f.y && f.x > f.z ? f.x : f.y > f.z ? f.y : f.z;
 
-    color = color + reflectance * hit.emission;
+    color = color + reflectance * material.emission;
 
     if (++depth_iteration > max_bounces) {
       if (random_float(random) < p) {
@@ -363,7 +387,7 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
 
     reflectance = reflectance * f;
 
-    if (hit.material == DIFF) {
+    if (material.type == DIFF) {
       // http://www.rorydriscoll.com/2009/01/07/better-sampling/
       vec3 sdir;
       if (glm::abs(normal.x) > 0.1) {
@@ -381,11 +405,11 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
       ray.origin = hit_position;
       ray.direction = glm::normalize(d);
       continue;
-    } else if (hit.material == REFL) {
+    } else if (material.type == REFL) {
       ray.origin = hit_position;
       ray.direction = reflect(ray.direction, normal);
       continue;
-    } else if (hit.material == REFR) {
+    } else if (material.type == REFR) {
       Ray reflRay;
       reflRay.origin = hit_position;
       reflRay.direction = reflect(ray.direction, n);
