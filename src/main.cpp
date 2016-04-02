@@ -4,8 +4,8 @@
 #include <random>
 
 #include <glm/glm.hpp>
-#include <glm/gtx/intersect.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/component_wise.hpp>
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -373,7 +373,7 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
 
     vec3 f = material.color;
 
-    float p = f.x > f.y && f.x > f.z ? f.x : f.y > f.z ? f.y : f.z;
+    float p = glm::compMax(f);
 
     color = color + reflectance * material.emission;
 
