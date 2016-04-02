@@ -4,6 +4,7 @@
 #include <random>
 
 #include <glm/glm.hpp>
+#include <glm/gtx/norm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/component_wise.hpp>
 
@@ -118,11 +119,142 @@ void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indice
   mesh->indices_count = indices_count;
 }
 
+struct BVHNode {
+  bool is_leaf;
+  AABB bounds;
+
+  u32 count;
+  Triangle *triangles;
+
+  struct BVHNode *left;
+  struct BVHNode *right;
+};
+
 struct World {
   Array<Model> models;
   Array<Triangle> triangles;
   Array<Material> materials;
+
+  BVHNode *bvh;
 };
+
+void merge_aabb(AABB *a, AABB &b) {
+  if (b.min.x < a->min.x) { a->min.x = b.min.x; }
+  if (b.min.y < a->min.y) { a->min.y = b.min.y; }
+  if (b.min.z < a->min.z) { a->min.z = b.min.z; }
+
+  if (b.max.x > a->max.x) { a->max.x = b.max.x; }
+  if (b.max.y > a->max.y) { a->max.y = b.max.y; }
+  if (b.max.z > a->max.z) { a->max.z = b.max.z; }
+}
+
+AABB compute_bounding_volume(Triangle *triangles, u32 count) {
+  AABB result;
+
+  for (u32 i=0; i<count; i++) {
+    Triangle *it = triangles + i;
+    if (i == 0) {
+      result = it->bounds;
+    } else {
+      merge_aabb(&result, it->bounds);
+    }
+  }
+
+  return result;
+}
+
+vec3 aabb_center(AABB bounds) {
+  return bounds.min + (bounds.max - bounds.min) / 2.0f;
+}
+
+float surface_area(AABB bounds) {
+  vec3 extent = bounds.max - bounds.min;
+  return 2.0f * (extent.x * extent.z + extent.x * extent.y + extent.y * extent.z);
+}
+
+u32 partition_objects(AABB bounds, Triangle *triangles, u32 count) {
+  vec3 center;
+  for (u32 i=0; i<count; i++) {
+    vec3 item_center = aabb_center(triangles[i].bounds);
+    if (i == 0) {
+      center = item_center;
+    } else {
+      center = (center + item_center) / 2.0f;
+    }
+  }
+
+  float best_cost = FLT_MAX;
+  u32 best_axis;
+
+  for (u32 axis=0; axis<3; axis++) {
+    std::sort(triangles, triangles + count, [axis](Triangle &a, Triangle &b) {
+      return aabb_center(a.bounds)[axis] < aabb_center(b.bounds)[axis];
+    });
+
+    u32 k = 0;
+    for (u32 i=0; i<count; i++) {
+      Triangle *item = triangles + i;
+
+      if (aabb_center(item->bounds)[axis] < center[axis]) {
+        k += 1;
+      } else {
+        break;
+      }
+    }
+
+    float left_cost = surface_area(compute_bounding_volume(triangles, k));
+    float right_cost = surface_area(compute_bounding_volume(triangles, count - k));
+    float cost = left_cost + right_cost;
+
+    if (cost < best_cost) {
+      best_cost = cost;
+      best_axis = axis;
+    }
+  }
+
+  std::sort(triangles, triangles + count, [best_axis](Triangle &a, Triangle &b) {
+    return aabb_center(a.bounds)[best_axis] < aabb_center(b.bounds)[best_axis];
+  });
+
+  u32 k = 0;
+  for (u32 i=0; i<count; i++) {
+    Triangle *item = triangles + i;
+
+    if (aabb_center(item->bounds)[best_axis] < center[best_axis]) {
+      k += 1;
+    } else {
+      break;
+    }
+  }
+
+  return k;
+}
+
+void top_down_bvtree(BVHNode **tree, Triangle *triangles, u32 count) {
+  BVHNode *node = new BVHNode;
+
+  *tree = node;
+
+  node->bounds = compute_bounding_volume(&triangles[0], count);
+
+  if (count <= 1) {
+    node->is_leaf = true;
+    node->count = count;
+    node->triangles = &triangles[0];
+  } else {
+    u32 k = partition_objects(node->bounds, &triangles[0], count);
+
+    if (k == count || k == 0) {
+      node->is_leaf = true;
+      node->count = count;
+      node->triangles = &triangles[0];
+    } else {
+      node->is_leaf = false;
+      top_down_bvtree(&node->left, &triangles[0], k);
+      top_down_bvtree(&node->right, &triangles[k], count - k);
+    }
+  }
+}
 
 void load_model_work(World *world, const char *path) {
   Assimp::Importer importer;
@@ -205,7 +337,6 @@ void load_model_work(World *world, const char *path) {
       }
 
       array::push_back(world->models, model);
-
 
       for (u32 l=0; l<model.mesh.indices_count; l += 3) {
         int indices_a = model.mesh.indices[l + 0] * 3;
@@ -367,21 +498,43 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
   result->distance = FLT_MAX;
 }
 
+void bvh_intersect(BVHNode *root, Ray r, HitResult *result) {
+  int stack_ptr = 0;
+  BVHNode *stack[32];
+  stack[0] = root;
+
+  while (stack_ptr >= 0) {
+    BVHNode *node = stack[stack_ptr];
+    stack_ptr -= 1;
+
+    if (aabb_intersection(node->bounds, r)) {
+      if (node->is_leaf) {
+        for (u32 i=0; i<node->count; i++) {
+          Triangle *triangle = node->triangles + i;
+          if (node->count == 1 || aabb_intersection(triangle->bounds, r)) {
+            float intersection_distance;
+            if (intersect_triangle(triangle->positions[0], triangle->positions[1], triangle->positions[2], r, &intersection_distance)) {
+              if (intersection_distance < result->distance) {
+                result->distance = intersection_distance;
+                result->normal = triangle->normal;
+                result->material_index = triangle->material_index;
+              }
+            }
+          }
+        }
+      } else {
+        stack[++stack_ptr] = node->left;
+        stack[++stack_ptr] = node->right;
+      }
+    }
+  }
+}
+
 void intersect_all(HitResult *closest, World *world, const Ray &r) {
   HitResult result;
   result.distance = FLT_MAX;
 
 #if 0
-  HitResult hit;
-
-  for (auto it = array::begin(world->models); it != array::end(world->models); it++) {
-    intersect_model(&hit, it, r);
-    if (hit.distance < result.distance) {
-      result = hit;
-    }
-  }
-
-#else
   for (auto it = array::begin(world->triangles); it != array::end(world->triangles); it++) {
     if (!aabb_intersection(it->bounds, r)) {
       continue;
@@ -396,6 +549,8 @@ void intersect_all(HitResult *closest, World *world, const Ray &r) {
       }
     }
   }
+#else
+  bvh_intersect(world->bvh, r, &result);
 #endif
   *closest = result;
 }
@@ -513,6 +668,7 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
 
 struct Camera {
   vec3 position;
+  vec3 rotation;
   glm::mat4 view_matrix;
   int width;
   int height;
@@ -682,11 +838,18 @@ int main(int argc, char **argv) {
   vec3 *colors = new vec3[width * height];
 
   Camera camera;
-  camera.position = vec3(0.0, 1.0, 3.00);
+  /* camera.position = vec3(2.0, 1.0, 5.7); */
+  camera.position = vec3(0.0, 1.0, 3.0);
+  camera.rotation = vec3(0.0, 0.0, 0.0);
   camera.view_matrix = glm::perspective(glm::radians(50.0f), (float)width / (float)height, 0.1f, 1000.0f);
+  camera.view_matrix = glm::rotate(camera.view_matrix, camera.rotation.x, vec3(1.0, 0.0, 0.0));
+  camera.view_matrix = glm::rotate(camera.view_matrix, camera.rotation.y, vec3(0.0, 1.0, 0.0));
+  camera.view_matrix = glm::rotate(camera.view_matrix, camera.rotation.z, vec3(0.0, 0.0, 1.0));
   camera.view_matrix = glm::translate(camera.view_matrix, (camera.position * -1.0f));
   camera.width = width;
   camera.height = height;
+
+  top_down_bvtree(&world.bvh, world.triangles.data, world.triangles.size);
 
   u32 tile_count_x = 8;
   u32 tile_count_y = 8;
