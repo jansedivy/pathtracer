@@ -323,22 +323,21 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
 
 void intersect_all(HitResult *closest, World *world, const Ray &r) {
   HitResult result;
+  result.distance = FLT_MAX;
 
   HitResult hit;
-  float distance = FLT_MAX;
 
   for (auto it = array::begin(world->models); it != array::end(world->models); it++) {
     intersect_model(&hit, it, r);
-    if (hit.distance != FLT_MAX && hit.distance < distance) {
+    if (hit.distance < result.distance) {
       result = hit;
-      distance = hit.distance;
     }
   }
 
   *closest = result;
 }
 
-vec3 reflect(const vec3 &value, const vec3 &normal) {
+vec3 reflect(vec3 value, vec3 normal) {
   return value - normal * 2.0f * glm::dot(normal, value);
 }
 
