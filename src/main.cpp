@@ -102,11 +102,11 @@ void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indice
   u32 normals_size = normals_count * sizeof(float);
   u32 indices_size = indices_count * sizeof(int);
 
-  u8 *data = static_cast<u8*>(malloc(vertices_size + normals_size + indices_size));
+  u8 *data = static_cast<u8 *>(malloc(vertices_size + normals_size + indices_size));
 
-  float *vertices = (float*)data;
-  float *normals = (float*)(data + vertices_size);
-  int *indices = (int*)(data + vertices_size + normals_size);
+  float *vertices = (float *)data;
+  float *normals = (float *)(data + vertices_size);
+  int *indices = (int *)(data + vertices_size + normals_size);
 
   mesh->data = data;
 
@@ -140,19 +140,16 @@ struct World {
 };
 
 void merge_aabb(AABB *a, AABB &b) {
-  if (b.min.x < a->min.x) { a->min.x = b.min.x; }
-  if (b.min.y < a->min.y) { a->min.y = b.min.y; }
-  if (b.min.z < a->min.z) { a->min.z = b.min.z; }
-
-  if (b.max.x > a->max.x) { a->max.x = b.max.x; }
-  if (b.max.y > a->max.y) { a->max.y = b.max.y; }
-  if (b.max.z > a->max.z) { a->max.z = b.max.z; }
+  for (u32 i = 0; i < 3; i++) {
+    a->min[i] = glm::min(a->min[i], b.min[i]);
+    a->max[i] = glm::max(a->max[i], b.max[i]);
+  }
 }
 
 AABB compute_bounding_volume(Triangle *triangles, u32 count) {
   AABB result;
 
-  for (u32 i=0; i<count; i++) {
+  for (u32 i = 0; i < count; i++) {
     Triangle *it = triangles + i;
     if (i == 0) {
       result = it->bounds;
@@ -175,7 +172,7 @@ float surface_area(AABB bounds) {
 
 u32 partition_objects(AABB bounds, Triangle *triangles, u32 count) {
   vec3 center;
-  for (u32 i=0; i<count; i++) {
+  for (u32 i = 0; i < count; i++) {
     vec3 item_center = aabb_center(triangles[i].bounds);
     if (i == 0) {
       center = item_center;
@@ -187,25 +184,35 @@ u32 partition_objects(AABB bounds, Triangle *triangles, u32 count) {
   float best_cost = FLT_MAX;
   u32 best_axis;
 
-  for (u32 axis=0; axis<3; axis++) {
-    std::sort(triangles, triangles + count, [axis](Triangle &a, Triangle &b) {
-      return aabb_center(a.bounds)[axis] < aabb_center(b.bounds)[axis];
-    });
+  for (u32 axis = 0; axis < 3; axis++) {
+    int k = 0;
 
-    u32 k = 0;
-    for (u32 i=0; i<count; i++) {
+    AABB left;
+    AABB right;
+
+    bool over = false;
+    for (u32 i = 0; i < count; i++) {
       Triangle *item = triangles + i;
 
-      if (aabb_center(item->bounds)[axis] < center[axis]) {
+      if (!over && aabb_center(item->bounds)[axis] < center[axis]) {
         k += 1;
+        over = true;
+
+        if (i == 0) {
+          left = item->bounds;
+        } else {
+          merge_aabb(&left, item->bounds);
+        }
       } else {
-        break;
+        if (i == 0) {
+          right = item->bounds;
+        } else {
+          merge_aabb(&right, item->bounds);
+        }
       }
     }
 
-    float left_cost = surface_area(compute_bounding_volume(triangles, k));
-    float right_cost = surface_area(compute_bounding_volume(triangles, count - k));
-    float cost = left_cost + right_cost;
+    float cost = surface_area(left) + surface_area(right);
 
     if (cost < best_cost) {
       best_cost = cost;
@@ -213,12 +220,13 @@ u32 partition_objects(AABB bounds, Triangle *triangles, u32 count) {
     }
   }
 
+  u32 k = 0;
+
   std::sort(triangles, triangles + count, [best_axis](Triangle &a, Triangle &b) {
     return aabb_center(a.bounds)[best_axis] < aabb_center(b.bounds)[best_axis];
   });
 
-  u32 k = 0;
-  for (u32 i=0; i<count; i++) {
+  for (u32 i = 0; i < count; i++) {
     Triangle *item = triangles + i;
 
     if (aabb_center(item->bounds)[best_axis] < center[best_axis]) {
@@ -231,28 +239,57 @@ u32 partition_objects(AABB bounds, Triangle *triangles, u32 count) {
   return k;
 }
 
-void top_down_bvtree(BVHNode **tree, Triangle *triangles, u32 count) {
-  BVHNode *node = new BVHNode;
+struct TopDownBVHStack {
+  BVHNode **tree;
+  Triangle *triangles;
+  u32 count;
+};
 
-  *tree = node;
+void top_down_bvtree(BVHNode **in_tree, Triangle *in_triangles, u32 in_count) {
+  TopDownBVHStack stack[256];
+  int stack_ptr = 0;
+  stack[stack_ptr].tree = in_tree;
+  stack[stack_ptr].triangles = in_triangles;
+  stack[stack_ptr].count = in_count;
 
-  node->bounds = compute_bounding_volume(&triangles[0], count);
+  while (stack_ptr >= 0) {
+    TopDownBVHStack item = stack[stack_ptr--];
 
-  if (count <= 1) {
-    node->is_leaf = true;
-    node->count = count;
-    node->triangles = &triangles[0];
-  } else {
-    u32 k = partition_objects(node->bounds, &triangles[0], count);
+    BVHNode *node = new BVHNode;
+    node->left = NULL;
+    node->right = NULL;
 
-    if (k == count || k == 0) {
+    *item.tree = node;
+
+    node->bounds = compute_bounding_volume(&item.triangles[0], item.count);
+
+    if (item.count <= 1) {
       node->is_leaf = true;
-      node->count = count;
-      node->triangles = &triangles[0];
+      node->count = item.count;
+      node->triangles = &item.triangles[0];
     } else {
-      node->is_leaf = false;
-      top_down_bvtree(&node->left, &triangles[0], k);
-      top_down_bvtree(&node->right, &triangles[k], count - k);
+      u32 k = partition_objects(node->bounds, &item.triangles[0], item.count);
+
+      if (k == item.count || k == 0) {
+        node->is_leaf = true;
+        node->count = item.count;
+        node->triangles = &item.triangles[0];
+      } else {
+        node->is_leaf = false;
+        if (k > 0) {
+          stack_ptr += 1;
+          stack[stack_ptr].tree = &node->left;
+          stack[stack_ptr].triangles = &item.triangles[0];
+          stack[stack_ptr].count = k;
+        }
+
+        if (item.count - k > 0) {
+          stack_ptr += 1;
+          stack[stack_ptr].tree = &node->right;
+          stack[stack_ptr].triangles = &item.triangles[k];
+          stack[stack_ptr].count = item.count - k;
+        }
+      }
     }
   }
 }
@@ -260,15 +297,16 @@ void top_down_bvtree(BVHNode **tree, Triangle *triangles, u32 count) {
 void load_model_work(World *world, const char *path) {
   Assimp::Importer importer;
 
-  const aiScene* scene = importer.ReadFile(path, aiProcess_GenNormals |
-      aiProcess_Triangulate |
-      aiProcess_JoinIdenticalVertices);
+  const aiScene *scene = importer.ReadFile(path, aiProcess_GenNormals |
+                                                     aiProcess_Triangulate |
+                                                     aiProcess_JoinIdenticalVertices);
 
-  for (u32 i=0; i<scene->mNumMaterials; i++) {
+  for (u32 i = 0; i < scene->mNumMaterials; i++) {
     aiMaterial *material = scene->mMaterials[i];
 
     Material model_material;
     model_material.type = DIFF;
+
     aiColor4D diffuse;
     if (aiGetMaterialColor(material, AI_MATKEY_COLOR_DIFFUSE, &diffuse) == AI_SUCCESS) {
       model_material.color = vec3(diffuse.r, diffuse.g, diffuse.b);
@@ -283,12 +321,12 @@ void load_model_work(World *world, const char *path) {
   }
 
   if (scene->HasMeshes()) {
-    for (u32 i=0; i<scene->mNumMeshes; i++) {
+    for (u32 i = 0; i < scene->mNumMeshes; i++) {
       aiMesh *mesh_data = scene->mMeshes[i];
 
       u32 index_count = 0;
 
-      for (u32 l=0; l<mesh_data->mNumFaces; l++) {
+      for (u32 l = 0; l < mesh_data->mNumFaces; l++) {
         aiFace face = mesh_data->mFaces[l];
 
         index_count += face.mNumIndices;
@@ -309,13 +347,19 @@ void load_model_work(World *world, const char *path) {
 
       allocate_mesh(&model.mesh, vertices_count, normals_count, indices_count);
 
-      for (u32 l=0; l<mesh_data->mNumVertices; l++) {
+      for (u32 l = 0; l < mesh_data->mNumVertices; l++) {
         model.mesh.vertices[vertices_index++] = mesh_data->mVertices[l].x;
         model.mesh.vertices[vertices_index++] = mesh_data->mVertices[l].y;
         model.mesh.vertices[vertices_index++] = mesh_data->mVertices[l].z;
 
-#define FIND_MIN(a, b) if ((a) < (b)) { (b) = (a); }
-#define FIND_MAX(a, b) if ((a) > (b)) { (b) = (a); }
+#define FIND_MIN(a, b) \
+  if ((a) < (b)) {     \
+    (b) = (a);         \
+  }
+#define FIND_MAX(a, b) \
+  if ((a) > (b)) {     \
+    (b) = (a);         \
+  }
 
         FIND_MIN(mesh_data->mVertices[l].x, model.mesh.bounds.min.x);
         FIND_MIN(mesh_data->mVertices[l].y, model.mesh.bounds.min.y);
@@ -329,17 +373,17 @@ void load_model_work(World *world, const char *path) {
         model.mesh.normals[normals_index++] = mesh_data->mNormals[l].z;
       }
 
-      for (u32 l=0; l<mesh_data->mNumFaces; l++) {
+      for (u32 l = 0; l < mesh_data->mNumFaces; l++) {
         aiFace face = mesh_data->mFaces[l];
 
-        for (u32 j=0; j<face.mNumIndices; j++) {
+        for (u32 j = 0; j < face.mNumIndices; j++) {
           model.mesh.indices[indices_index++] = face.mIndices[j];
         }
       }
 
       array::push_back(world->models, model);
 
-      for (u32 l=0; l<model.mesh.indices_count; l += 3) {
+      for (u32 l = 0; l < model.mesh.indices_count; l += 3) {
         int indices_a = model.mesh.indices[l + 0] * 3;
         int indices_b = model.mesh.indices[l + 1] * 3;
         int indices_c = model.mesh.indices[l + 2] * 3;
@@ -363,7 +407,7 @@ void load_model_work(World *world, const char *path) {
         model.mesh.bounds.min = vec3(FLT_MAX);
         model.mesh.bounds.max = vec3(FLT_MIN);
 
-        for (u32 k=0; k<3; k++) {
+        for (u32 k = 0; k < 3; k++) {
           FIND_MIN(triangle.positions[k].x, triangle.bounds.min.x);
           FIND_MIN(triangle.positions[k].y, triangle.bounds.min.y);
           FIND_MIN(triangle.positions[k].z, triangle.bounds.min.z);
@@ -464,7 +508,7 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
   float result_distance;
 
   u32 index;
-  for (u32 i=0; i<model->mesh.indices_count; i += 3) {
+  for (u32 i = 0; i < model->mesh.indices_count; i += 3) {
     int indices_a = model->mesh.indices[i + 0] * 3;
     int indices_b = model->mesh.indices[i + 1] * 3;
     int indices_c = model->mesh.indices[i + 2] * 3;
@@ -502,30 +546,36 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
 
 void bvh_intersect(BVHNode *root, Ray r, HitResult *result) {
   int stack_ptr = 0;
-  BVHNode *stack[32];
+  BVHNode *stack[512];
   stack[0] = root;
 
   while (stack_ptr >= 0) {
-    BVHNode *node = stack[stack_ptr];
-    stack_ptr -= 1;
+    BVHNode *node = stack[stack_ptr--];
 
-    if (aabb_intersection(node->bounds, r)) {
-      if (node->is_leaf) {
-        for (u32 i=0; i<node->count; i++) {
-          Triangle *triangle = node->triangles + i;
-          if (node->count == 1 || aabb_intersection(triangle->bounds, r)) {
-            float intersection_distance;
-            if (intersect_triangle(triangle->positions[0], triangle->positions[1], triangle->positions[2], r, &intersection_distance)) {
-              if (intersection_distance < result->distance) {
-                result->distance = intersection_distance;
-                result->normal = triangle->normal;
-                result->material_index = triangle->material_index;
-              }
+    if (!aabb_intersection(node->bounds, r)) {
+      continue;
+    }
+
+    if (node->is_leaf) {
+      for (u32 i = 0; i < node->count; i++) {
+        Triangle *triangle = node->triangles + i;
+        if (node->count == 1 || aabb_intersection(triangle->bounds, r)) {
+          float intersection_distance;
+          if (intersect_triangle(triangle->positions[0], triangle->positions[1], triangle->positions[2], r, &intersection_distance)) {
+            if (intersection_distance < result->distance) {
+              result->distance = intersection_distance;
+              result->normal = triangle->normal;
+              result->material_index = triangle->material_index;
             }
           }
         }
-      } else {
+      }
+    } else {
+      if (node->left != NULL) {
         stack[++stack_ptr] = node->left;
+      }
+
+      if (node->right != NULL) {
         stack[++stack_ptr] = node->right;
       }
     }
@@ -561,9 +611,10 @@ vec3 reflect(vec3 value, vec3 normal) {
   return value - normal * 2.0f * glm::dot(normal, value);
 }
 
+// http://www.rorydriscoll.com/2009/01/07/better-sampling/
 vec3 cosine_sample_hemisphere(float u1, float u2) {
-  float theta = TAU * u2;
   float r = glm::sqrt(u1);
+  float theta = TAU * u2;
 
   float x = r * glm::cos(theta);
   float y = r * glm::sin(theta);
@@ -581,7 +632,9 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
   while (true) {
     intersect_all(&hit, world, ray);
     if (hit.distance == FLT_MAX) {
-      return color + vec3(0.7, 0.7, 0.8)/20.0f * reflectance;
+      return color + vec3(0.3515625f, 0.640625f, 1.0f) * reflectance;
+      /* return color + vec3(0.7, 0.7, 0.8)/20.0f * reflectance; */
+      /* return color; */
     }
 
     vec3 n = hit.normal;
@@ -607,7 +660,6 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
     reflectance = reflectance * f;
 
     if (material.type == DIFF) {
-      // http://www.rorydriscoll.com/2009/01/07/better-sampling/
       vec3 sdir;
       if (glm::abs(normal.x) > 0.1) {
         sdir = glm::normalize(glm::cross(vec3(0.0, 1.0, 0.0), normal));
@@ -636,29 +688,29 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
       reflRay.direction = reflect(ray.direction, n);
       ray.inv = 1.0f / ray.direction;
       bool into = glm::dot(n, normal) > 0.0;
-      float nc=1, nt=1.5, nnt=into?nc/nt:nt/nc, ddn=glm::dot(ray.direction, normal), cos2t;
-      if ((cos2t=1-nnt*nnt*(1-ddn*ddn))<0){
+      float nc = 1, nt = 1.5, nnt = into ? nc / nt : nt / nc, ddn = glm::dot(ray.direction, normal), cos2t;
+      if ((cos2t = 1 - nnt * nnt * (1 - ddn * ddn)) < 0) {
         ray = reflRay;
         continue;
       }
 
-      vec3 tdir = glm::normalize(ray.direction*nnt - n*((into?1:-1)*(ddn*nnt+glm::sqrt(cos2t))));
-      float a=nt-nc;
-      float b=nt+nc;
-      float R0=a*a/(b*b);
-      float c = 1-(into?-ddn:glm::dot(tdir, n));
+      vec3 tdir = glm::normalize(ray.direction * nnt - n * ((into ? 1 : -1) * (ddn * nnt + glm::sqrt(cos2t))));
+      float a = nt - nc;
+      float b = nt + nc;
+      float R0 = a * a / (b * b);
+      float c = 1 - (into ? -ddn : glm::dot(tdir, n));
 
-      float Re=R0+(1-R0)*c*c*c*c*c;
-      float Tr=1-Re;
-      float P=.25+.5*Re;
-      float RP=Re/P;
-      float TP=Tr/(1-P);
+      float Re = R0 + (1 - R0) * c * c * c * c * c;
+      float Tr = 1 - Re;
+      float P = .25 + .5 * Re;
+      float RP = Re / P;
+      float TP = Tr / (1 - P);
 
       if (random_float(random) < P) {
-        reflectance = reflectance*RP;
+        reflectance = reflectance * RP;
         ray = reflRay;
       } else {
-        reflectance = reflectance*TP;
+        reflectance = reflectance * TP;
         ray.origin = hit_position;
         ray.direction = tdir;
         ray.inv = 1.0f / ray.direction;
@@ -753,7 +805,7 @@ char *mprintf(const char *format, ...) {
 void export_image(char *name, vec3 *colors, int width, int height) {
   u8 *dst = (u8 *)malloc(4 * width * height);
 
-  for (int i=0; i<width*height; i++) {
+  for (int i = 0; i < width * height; i++) {
     dst[i * 4 + 0] = to_int(colors[i].x);
     dst[i * 4 + 1] = to_int(colors[i].y);
     dst[i * 4 + 2] = to_int(colors[i].z);
@@ -784,19 +836,19 @@ void render(void *data) {
 
   work->state = RenderTileState::RENDERING;
 
-  for (int y=min_y; y<max_y; y++) {
-    for (int x=min_x; x<max_x; x++) {
+  for (int y = min_y; y < max_y; y++) {
+    for (int x = min_x; x < max_x; x++) {
       int i = (height - y - 1) * width + x;
       vec3 pixel_color = vec3(0.0);
 
-      for (int sy=0; sy<2; sy++) {
-        for (int sx=0; sx<2; sx++) {
-          float dx = ((float)sx + 0.5)/2.0;
-          float dy = ((float)sy + 0.5)/2.0;
+      for (int sy = 0; sy < 2; sy++) {
+        for (int sx = 0; sx < 2; sx++) {
+          float dx = ((float)sx + 0.5) / 2.0;
+          float dy = ((float)sy + 0.5) / 2.0;
 
           Ray ray = get_camera_ray(camera, x - 0.5f + dx, y - 0.5f + dy);
 
-          for (int s=0; s<samps; s++) {
+          for (int s = 0; s < samps; s++) {
             vec3 ray_color = radiance(world, ray, max_bounces, &random);
             pixel_color = pixel_color + ray_color * (1.0f / samps);
           }
@@ -813,11 +865,11 @@ void render(void *data) {
 
 int main(int argc, char **argv) {
   std::srand(std::time(NULL));
-  int width = 256;
+  int width = 512;
   int height = width * (9.0f / 16.0f);
-  int max_bounces = 4;
-  int samps = 130;
-  char *model_file = (char *)"box.obj";
+  int max_bounces = 3;
+  int samps = 20;
+  char *model_file = (char *)"tree.obj";
 
   if (argc > 1) {
     samps = atoi(argv[1]);
@@ -875,8 +927,8 @@ int main(int argc, char **argv) {
   u32 count = 0;
   u32 tile_start_x = 0;
   u32 tile_start_y = 0;
-  for (u32 y=tile_start_y; y<tile_count_y; y++) {
-    for (u32 x=tile_start_x; x<tile_count_x; x++) {
+  for (u32 y = tile_start_y; y < tile_count_y; y++) {
+    for (u32 x = tile_start_x; x < tile_count_x; x++) {
       RenderData *item = data + count++;
 
       item->random.seed = count;
@@ -904,7 +956,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  for (u32 i=0; i<count; i++) {
+  for (u32 i = 0; i < count; i++) {
     add_work(&main_queue, render, data + i);
   }
 
@@ -913,10 +965,10 @@ int main(int argc, char **argv) {
 
   SDL_Init(SDL_INIT_EVERYTHING);
   SDL_Window *window = SDL_CreateWindow("Pathtracer",
-      SDL_WINDOWPOS_UNDEFINED,
-      SDL_WINDOWPOS_UNDEFINED,
-      window_width, window_height,
-      SDL_WINDOW_SHOWN);
+                                        SDL_WINDOWPOS_UNDEFINED,
+                                        SDL_WINDOWPOS_UNDEFINED,
+                                        window_width, window_height,
+                                        SDL_WINDOW_SHOWN);
 
   SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 
@@ -941,7 +993,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    for (int i=0; i<width*height; i++) {
+    for (int i = 0; i < width * height; i++) {
       pixels[i * 4 + 0] = to_int(colors[i].z);
       pixels[i * 4 + 1] = to_int(colors[i].y);
       pixels[i * 4 + 2] = to_int(colors[i].x);
@@ -951,7 +1003,7 @@ int main(int argc, char **argv) {
     SDL_UpdateTexture(screen_texture, &screen_rect, pixels, width * 4);
     SDL_RenderCopy(renderer, screen_texture, NULL, NULL);
 
-    for (u32 tile_index=0; tile_index<array_count(data); tile_index++) {
+    for (u32 tile_index = 0; tile_index < array_count(data); tile_index++) {
       RenderData *item = data + tile_index;
 
       float scale_x = ((float)window_width / (float)width);
