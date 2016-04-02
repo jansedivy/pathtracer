@@ -88,6 +88,13 @@ struct Model {
   uint32_t material_index;
 };
 
+struct Triangle {
+  vec3 positions[3];
+  vec3 normal;
+  uint32_t material_index;
+  AABB bounds;
+};
+
 void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indices_count) {
   u32 vertices_size = vertices_count * sizeof(float);
   u32 normals_size = normals_count * sizeof(float);
@@ -113,6 +120,7 @@ void allocate_mesh(Mesh *mesh, u32 vertices_count, u32 normals_count, u32 indice
 
 struct World {
   Array<Model> models;
+  Array<Triangle> triangles;
   Array<Material> materials;
 };
 
@@ -197,6 +205,43 @@ void load_model_work(World *world, const char *path) {
       }
 
       array::push_back(world->models, model);
+
+
+      for (u32 l=0; l<model.mesh.indices_count; l += 3) {
+        int indices_a = model.mesh.indices[l + 0] * 3;
+        int indices_b = model.mesh.indices[l + 1] * 3;
+        int indices_c = model.mesh.indices[l + 2] * 3;
+
+        vec3 a = *(vec3 *)(model.mesh.vertices + indices_a);
+        vec3 b = *(vec3 *)(model.mesh.vertices + indices_b);
+        vec3 c = *(vec3 *)(model.mesh.vertices + indices_c);
+
+        vec3 normal_a = *(vec3 *)(model.mesh.normals + indices_a);
+        vec3 normal_b = *(vec3 *)(model.mesh.normals + indices_b);
+        vec3 normal_c = *(vec3 *)(model.mesh.normals + indices_c);
+
+        Triangle triangle;
+        triangle.positions[0] = a;
+        triangle.positions[1] = b;
+        triangle.positions[2] = c;
+
+        triangle.normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0f);
+
+        triangle.material_index = model.material_index;
+        model.mesh.bounds.min = vec3(FLT_MAX);
+        model.mesh.bounds.max = vec3(FLT_MIN);
+
+        for (u32 k=0; k<3; k++) {
+          FIND_MIN(triangle.positions[k].x, triangle.bounds.min.x);
+          FIND_MIN(triangle.positions[k].y, triangle.bounds.min.y);
+          FIND_MIN(triangle.positions[k].z, triangle.bounds.min.z);
+          FIND_MAX(triangle.positions[k].x, triangle.bounds.max.x);
+          FIND_MAX(triangle.positions[k].y, triangle.bounds.max.y);
+          FIND_MAX(triangle.positions[k].z, triangle.bounds.max.z);
+        }
+
+        array::push_back(world->triangles, triangle);
+      }
     }
   }
 }
@@ -204,6 +249,7 @@ void load_model_work(World *world, const char *path) {
 struct Ray {
   vec3 origin;
   vec3 direction;
+  vec3 inv;
 };
 
 struct HitResult {
@@ -213,8 +259,8 @@ struct HitResult {
 };
 
 bool aabb_intersection(AABB b, Ray r) {
-  vec3 min = (b.min - r.origin) / r.direction;
-  vec3 max = (b.max - r.origin) / r.direction;
+  vec3 min = (b.min - r.origin) * r.inv;
+  vec3 max = (b.max - r.origin) * r.inv;
 
   float tmin = glm::max(glm::max(glm::min(min.x, max.x), glm::min(min.y, max.y)), glm::min(min.z, max.z));
   float tmax = glm::min(glm::min(glm::max(min.x, max.x), glm::max(min.y, max.y)), glm::max(min.z, max.z));
@@ -325,6 +371,7 @@ void intersect_all(HitResult *closest, World *world, const Ray &r) {
   HitResult result;
   result.distance = FLT_MAX;
 
+#if 0
   HitResult hit;
 
   for (auto it = array::begin(world->models); it != array::end(world->models); it++) {
@@ -334,6 +381,22 @@ void intersect_all(HitResult *closest, World *world, const Ray &r) {
     }
   }
 
+#else
+  for (auto it = array::begin(world->triangles); it != array::end(world->triangles); it++) {
+    if (!aabb_intersection(it->bounds, r)) {
+      continue;
+    }
+
+    float intersection_distance;
+    if (intersect_triangle(it->positions[0], it->positions[1], it->positions[2], r, &intersection_distance)) {
+      if (intersection_distance < result.distance) {
+        result.distance = intersection_distance;
+        result.normal = it->normal;
+        result.material_index = it->material_index;
+      }
+    }
+  }
+#endif
   *closest = result;
 }
 
@@ -403,15 +466,18 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
 
       ray.origin = hit_position;
       ray.direction = glm::normalize(d);
+      ray.inv = 1.0f / ray.direction;
       continue;
     } else if (material.type == REFL) {
       ray.origin = hit_position;
       ray.direction = reflect(ray.direction, normal);
+      ray.inv = 1.0f / ray.direction;
       continue;
     } else if (material.type == REFR) {
       Ray reflRay;
       reflRay.origin = hit_position;
       reflRay.direction = reflect(ray.direction, n);
+      ray.inv = 1.0f / ray.direction;
       bool into = glm::dot(n, normal) > 0.0;
       float nc=1, nt=1.5, nnt=into?nc/nt:nt/nc, ddn=glm::dot(ray.direction, normal), cos2t;
       if ((cos2t=1-nnt*nnt*(1-ddn*ddn))<0){
@@ -438,6 +504,7 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
         reflectance = reflectance*TP;
         ray.origin = hit_position;
         ray.direction = tdir;
+        ray.inv = 1.0f / ray.direction;
       }
       continue;
     }
@@ -463,6 +530,7 @@ Ray get_camera_ray(Camera *camera, float x, float y) {
   Ray ray;
   ray.origin = from;
   ray.direction = direction;
+  ray.inv = 1.0f / ray.direction;
 
   return ray;
 }
