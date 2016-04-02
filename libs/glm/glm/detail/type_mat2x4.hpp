@@ -57,11 +57,6 @@ namespace glm
 			static GLM_RELAXED_CONSTEXPR precision prec = P;
 #		endif//GLM_META_PROG_HELPERS
 
-#		ifdef GLM_STATIC_CONST_MEMBERS
-			static const type ZERO;
-			static const type IDENTITY;
-#		endif
-
 	private:
 		col_type value[2];
 
@@ -197,10 +192,10 @@ namespace glm
 	GLM_FUNC_DECL tmat3x4<T, P> operator*(tmat2x4<T, P> const & m1, tmat3x2<T, P> const & m2);
 
 	template <typename T, precision P>
-	GLM_FUNC_DECL tmat2x4<T, P> operator/(tmat2x4<T, P> const & m, T s);
+	GLM_FUNC_DECL tmat2x4<T, P> operator/(tmat2x4<T, P> const & m, T const & s);
 
 	template <typename T, precision P>
-	GLM_FUNC_DECL tmat2x4<T, P> operator/(T s, tmat2x4<T, P> const & m);
+	GLM_FUNC_DECL tmat2x4<T, P> operator/(T const & s, tmat2x4<T, P> const & m);
 
 	// -- Boolean operators --
 
@@ -209,16 +204,6 @@ namespace glm
 
 	template <typename T, precision P>
 	GLM_FUNC_DECL bool operator!=(tmat2x4<T, P> const & m1, tmat2x4<T, P> const & m2);
-
-	// -- Is type --
-
-	template <typename T, precision P>
-	struct type<T, P, tmat2x4>
-	{
-		static bool const is_vec = false;
-		static bool const is_mat = true;
-		static bool const is_quat = false;
-	};
 }//namespace glm
 
 #ifndef GLM_EXTERNAL_TEMPLATE

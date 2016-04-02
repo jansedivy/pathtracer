@@ -30,6 +30,7 @@
 # CMake
 CMakeCache.txt
 CMakeFiles
+Makefile
 cmake_install.cmake
 install_manifest.txt
 *.cmake
@@ -42,9 +43,5 @@ Testing/*
 test/gtc/*.dds
 
 # Project Files
-Makefile
 *.cbp
 *.user
-
-# Misc.
-*.log

@@ -114,25 +114,6 @@ namespace detail
 		__m128 Data;
 #endif
 
-#		ifdef GLM_STATIC_CONST_MEMBERS
-		static const type ZERO;
-		static const type X;
-		static const type Y;
-		static const type Z;
-		static const type W;
-		static const type XY;
-		static const type XZ;
-		static const type XW;
-		static const type YZ;
-		static const type YW;
-		static const type ZW;
-		static const type XYZ;
-		static const type XYW;
-		static const type XZW;
-		static const type YZW;
-		static const type XYZW;
-#		endif
-
 		//////////////////////////////////////
 		// Implicit basic constructors
 
@@ -186,15 +167,15 @@ namespace detail
 		//////////////////////////////////////
 		// Swizzle operators
 
-		template <comp X_, comp Y_, comp Z_, comp W_>
+		template <comp X, comp Y, comp Z, comp W>
 		fvec4SIMD& swizzle();
-		template <comp X_, comp Y_, comp Z_, comp W_>
+		template <comp X, comp Y, comp Z, comp W>
 		fvec4SIMD swizzle() const;
-		template <comp X_, comp Y_, comp Z_>
+		template <comp X, comp Y, comp Z>
 		fvec4SIMD swizzle() const;
-		template <comp X_, comp Y_>
+		template <comp X, comp Y>
 		fvec4SIMD swizzle() const;
-		template <comp X_>
+		template <comp X>
 		fvec4SIMD swizzle() const;
 	};
 }//namespace detail
