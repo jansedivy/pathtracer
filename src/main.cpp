@@ -7,6 +7,7 @@
 #include <glm/gtx/norm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/component_wise.hpp>
+#include <glm/gtx/intersect.hpp>
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -96,7 +97,7 @@ struct Model {
 
 struct Triangle {
   vec3 positions[3];
-  vec3 normal;
+  vec3 normals[3];
   uint32_t material_index;
   AABB bounds;
 };
@@ -418,7 +419,9 @@ void load_model_work(World *world, const char *path) {
         triangle.positions[1] = b;
         triangle.positions[2] = c;
 
-        triangle.normal = glm::normalize((normal_a + normal_b + normal_c) / 3.0f);
+        triangle.normals[0] = normal_a;
+        triangle.normals[1] = normal_b;
+        triangle.normals[2] = normal_c;
 
         triangle.material_index = model.material_index;
         model.mesh.bounds.min = vec3(FLT_MAX);
@@ -575,11 +578,13 @@ void bvh_intersect(FlatTree *tree, Ray r, HitResult *result) {
     if (node->right_offset == 0) {
       for (u32 i = 0; i < node->count; i++) {
         Triangle *triangle = node->triangles + i;
-        float intersection_distance;
-        if (intersect_triangle(triangle->positions[0], triangle->positions[1], triangle->positions[2], r, &intersection_distance)) {
-          if (intersection_distance < result->distance) {
-            result->distance = intersection_distance;
-            result->normal = triangle->normal;
+        vec3 uv;
+        if (glm::intersectRayTriangle(r.origin, r.direction, triangle->positions[0], triangle->positions[1], triangle->positions[2], uv)) {
+          if (uv.z < result->distance) {
+            result->distance = uv.z;
+
+            result->normal = glm::normalize((1 - uv.x - uv.y) * triangle->normals[0] + uv.x * triangle->normals[1] + uv.y * triangle->normals[2]);
+
             result->material_index = triangle->material_index;
           }
         }
