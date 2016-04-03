@@ -565,17 +565,16 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
   result->distance = FLT_MAX;
 }
 
-void bvh_intersect(FlatTree *tree, Ray r, HitResult *result) {
+void bvh_intersect(BVHNode *root, Ray r, HitResult *result) {
   int stack_ptr = 0;
-  int stack[512];
-  stack[0] = 0;
+  BVHNode *stack[512];
+  stack[0] = root;
 
   while (stack_ptr >= 0) {
-    int index = stack[stack_ptr--];
+    BVHNode *node = stack[stack_ptr];
+    stack_ptr -= 1;
 
-    FlatTreeItem *node = &tree->items[index];
-
-    if (node->right_offset == 0) {
+    if (node->is_leaf) {
       for (u32 i = 0; i < node->count; i++) {
         Triangle *triangle = node->triangles + i;
         vec3 uv;
@@ -590,12 +589,12 @@ void bvh_intersect(FlatTree *tree, Ray r, HitResult *result) {
         }
       }
     } else {
-      if (node->has_left && aabb_intersection(tree->items[index + 1].bounds, r)) {
-        stack[++stack_ptr] = index + 1;
+      if (node->left && aabb_intersection(node->left->bounds, r)) {
+        stack[++stack_ptr] = node->left;
       }
 
-      if (aabb_intersection(tree->items[node->right_offset].bounds, r)) {
-        stack[++stack_ptr] = node->right_offset;
+      if (node->right && aabb_intersection(node->right->bounds, r)) {
+        stack[++stack_ptr] = node->right;
       }
     }
   }
@@ -621,7 +620,7 @@ void intersect_all(HitResult *closest, World *world, const Ray &r) {
     }
   }
 #else
-  bvh_intersect(&world->tree, r, &result);
+  bvh_intersect(world->bvh, r, &result);
 #endif
   *closest = result;
 }
@@ -885,37 +884,6 @@ void render(void *data) {
   work->state = RenderTileState::DONE;
 }
 
-int flat_bvtree(BVHNode *node, FlatTree *tree, int i = 0) {
-  int stack[256];
-  int stack_ptr = 0;
-
-  array::resize(tree->items, i + 1);
-
-  tree->items[i].bounds = node->bounds;
-  tree->items[i].count = node->count;
-  tree->items[i].triangles = node->triangles;
-  tree->items[i].has_left = node->left != NULL;
-  tree->items[i].right_offset = 0;
-
-  if (!node->is_leaf) {
-    if (node->right) {
-      stack[stack_ptr++] = i;
-    }
-
-    if (node->left) {
-      i = flat_bvtree(node->left, tree, i + 1);
-    }
-
-    if (node->right) {
-      int p = stack[--stack_ptr];
-      tree->items[p].right_offset = i + 1;
-      i = flat_bvtree(node->right, tree, i + 1);
-    }
-  }
-
-  return i;
-}
-
 int main(int argc, char **argv) {
   std::srand(0);
   int width = 256;
@@ -968,8 +936,6 @@ int main(int argc, char **argv) {
   camera.height = height;
 
   top_down_bvtree(&world.bvh, world.triangles.data, world.triangles.size);
-
-  flat_bvtree(world.bvh, &world.tree);
 
   struct StackNode {
     BVHNode *node;
