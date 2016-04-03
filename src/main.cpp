@@ -14,6 +14,10 @@
 
 #include <SDL2/SDL.h>
 
+#ifdef _MSC_VER
+#pragma comment(linker, "/subsystem:windows /ENTRY:mainCRTStartup")
+#endif
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
@@ -131,12 +135,25 @@ struct BVHNode {
   struct BVHNode *right;
 };
 
+struct FlatTreeItem {
+  bool has_left;
+  int right_offset;
+  AABB bounds;
+  u32 count;
+  Triangle *triangles;
+};
+
+struct FlatTree {
+  Array<FlatTreeItem> items;
+};
+
 struct World {
   Array<Model> models;
   Array<Triangle> triangles;
   Array<Material> materials;
 
   BVHNode *bvh;
+  FlatTree tree;
 };
 
 void merge_aabb(AABB *a, AABB &b) {
@@ -411,6 +428,7 @@ void load_model_work(World *world, const char *path) {
           FIND_MIN(triangle.positions[k].x, triangle.bounds.min.x);
           FIND_MIN(triangle.positions[k].y, triangle.bounds.min.y);
           FIND_MIN(triangle.positions[k].z, triangle.bounds.min.z);
+
           FIND_MAX(triangle.positions[k].x, triangle.bounds.max.x);
           FIND_MAX(triangle.positions[k].y, triangle.bounds.max.y);
           FIND_MAX(triangle.positions[k].z, triangle.bounds.max.z);
@@ -434,7 +452,7 @@ struct HitResult {
   uint32_t material_index;
 };
 
-bool aabb_intersection(AABB b, Ray r) {
+bool aabb_intersection(const AABB &b, const Ray &r) {
   vec3 min = (b.min - r.origin) * r.inv;
   vec3 max = (b.max - r.origin) * r.inv;
 
@@ -544,39 +562,35 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
   result->distance = FLT_MAX;
 }
 
-void bvh_intersect(BVHNode *root, Ray r, HitResult *result) {
+void bvh_intersect(FlatTree *tree, Ray r, HitResult *result) {
   int stack_ptr = 0;
-  BVHNode *stack[512];
-  stack[0] = root;
+  int stack[512];
+  stack[0] = 0;
 
   while (stack_ptr >= 0) {
-    BVHNode *node = stack[stack_ptr--];
+    int index = stack[stack_ptr--];
 
-    if (!aabb_intersection(node->bounds, r)) {
-      continue;
-    }
+    FlatTreeItem *node = &tree->items[index];
 
-    if (node->is_leaf) {
+    if (node->right_offset == 0) {
       for (u32 i = 0; i < node->count; i++) {
         Triangle *triangle = node->triangles + i;
-        if (node->count == 1 || aabb_intersection(triangle->bounds, r)) {
-          float intersection_distance;
-          if (intersect_triangle(triangle->positions[0], triangle->positions[1], triangle->positions[2], r, &intersection_distance)) {
-            if (intersection_distance < result->distance) {
-              result->distance = intersection_distance;
-              result->normal = triangle->normal;
-              result->material_index = triangle->material_index;
-            }
+        float intersection_distance;
+        if (intersect_triangle(triangle->positions[0], triangle->positions[1], triangle->positions[2], r, &intersection_distance)) {
+          if (intersection_distance < result->distance) {
+            result->distance = intersection_distance;
+            result->normal = triangle->normal;
+            result->material_index = triangle->material_index;
           }
         }
       }
     } else {
-      if (node->left != NULL) {
-        stack[++stack_ptr] = node->left;
+      if (node->has_left && aabb_intersection(tree->items[index + 1].bounds, r)) {
+        stack[++stack_ptr] = index + 1;
       }
 
-      if (node->right != NULL) {
-        stack[++stack_ptr] = node->right;
+      if (aabb_intersection(tree->items[node->right_offset].bounds, r)) {
+        stack[++stack_ptr] = node->right_offset;
       }
     }
   }
@@ -602,7 +616,7 @@ void intersect_all(HitResult *closest, World *world, const Ray &r) {
     }
   }
 #else
-  bvh_intersect(world->bvh, r, &result);
+  bvh_intersect(&world->tree, r, &result);
 #endif
   *closest = result;
 }
@@ -622,6 +636,18 @@ vec3 cosine_sample_hemisphere(float u1, float u2) {
   return vec3(x, y, glm::sqrt(glm::max(0.0f, 1.0f - u1)));
 }
 
+vec3 omg = glm::normalize(vec3(-1.0, 2.0, 0.0));
+
+vec3 sky_color_for(vec3 direction) {
+  float distance = glm::distance2(direction, omg);
+
+  if (distance < 0.02f) {
+    return vec3(20.0f);
+  }
+
+  return vec3(0.2f, 0.2f, 0.5f);
+}
+
 vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
   int depth_iteration = 0;
 
@@ -632,7 +658,8 @@ vec3 radiance(World *world, Ray ray, int max_bounces, RandomSequence *random) {
   while (true) {
     intersect_all(&hit, world, ray);
     if (hit.distance == FLT_MAX) {
-      return color + vec3(0.3515625f, 0.640625f, 1.0f) * reflectance;
+      return color + sky_color_for(ray.direction) * reflectance;
+      /* return color + vec3(0.3515625f, 0.640625f, 1.0f) * reflectance; */
       /* return color + vec3(0.7, 0.7, 0.8)/20.0f * reflectance; */
       /* return color; */
     }
@@ -792,16 +819,6 @@ inline int to_int(float x) {
   return int(glm::pow(glm::clamp(x, 0.0f, 1.0f), 1.0f / 2.2f) * 255 + 0.5f);
 }
 
-char *mprintf(const char *format, ...) {
-  va_list args;
-  va_start(args, format);
-  char *data;
-  vasprintf(&data, format, args);
-  va_end(args);
-
-  return data;
-}
-
 void export_image(char *name, vec3 *colors, int width, int height) {
   u8 *dst = (u8 *)malloc(4 * width * height);
 
@@ -812,9 +829,9 @@ void export_image(char *name, vec3 *colors, int width, int height) {
     dst[i * 4 + 3] = 255;
   }
 
-  char *path = mprintf("../../../%s.png", name);
+  char path[256];
+  sprintf(path, "../../../%s.png", name);
   stbi_write_png(path, width, height, 4, dst, width * 4);
-  free(path);
 
   free(dst);
 }
@@ -863,12 +880,43 @@ void render(void *data) {
   work->state = RenderTileState::DONE;
 }
 
+int flat_bvtree(BVHNode *node, FlatTree *tree, int i = 0) {
+  int stack[256];
+  int stack_ptr = 0;
+
+  array::resize(tree->items, i + 1);
+
+  tree->items[i].bounds = node->bounds;
+  tree->items[i].count = node->count;
+  tree->items[i].triangles = node->triangles;
+  tree->items[i].has_left = node->left != NULL;
+  tree->items[i].right_offset = 0;
+
+  if (!node->is_leaf) {
+    if (node->right) {
+      stack[stack_ptr++] = i;
+    }
+
+    if (node->left) {
+      i = flat_bvtree(node->left, tree, i + 1);
+    }
+
+    if (node->right) {
+      int p = stack[--stack_ptr];
+      tree->items[p].right_offset = i + 1;
+      i = flat_bvtree(node->right, tree, i + 1);
+    }
+  }
+
+  return i;
+}
+
 int main(int argc, char **argv) {
-  std::srand(std::time(NULL));
-  int width = 512;
+  std::srand(0);
+  int width = 256;
   int height = width * (9.0f / 16.0f);
-  int max_bounces = 3;
-  int samps = 20;
+  int max_bounces = 20;
+  int samps = 100;
   char *model_file = (char *)"tree.obj";
 
   if (argc > 1) {
@@ -885,7 +933,9 @@ int main(int argc, char **argv) {
 
   float aspect = (float)height / (float)width;
 
+#ifdef __APPLE__
   chdir(SDL_GetBasePath());
+#endif
 
   Queue main_queue = {};
   initialize_queue(&main_queue, 128);
@@ -914,8 +964,37 @@ int main(int argc, char **argv) {
 
   top_down_bvtree(&world.bvh, world.triangles.data, world.triangles.size);
 
-  u32 tile_count_x = 8;
-  u32 tile_count_y = 8;
+  flat_bvtree(world.bvh, &world.tree);
+
+  struct StackNode {
+    BVHNode *node;
+    u32 depth;
+  };
+
+  StackNode stack[512];
+  int stack_ptr = 0;
+  stack[0] = { world.bvh, 0 };
+
+  while (stack_ptr >= 0) {
+    StackNode item = stack[stack_ptr--];
+
+    for (u32 i=0; i<item.depth; i++) {
+      printf(" ");
+    }
+    printf("min: [%f, %f, %f], max: [%f, %f, %f]\n", item.node->bounds.min.x, item.node->bounds.min.y, item.node->bounds.min.z, item.node->bounds.max.x, item.node->bounds.max.y, item.node->bounds.max.z);
+
+    if (!item.node->is_leaf) {
+      if (item.node->left) {
+        stack[++stack_ptr] = { item.node->left, item.depth + 1 };
+      }
+      if (item.node->right) {
+        stack[++stack_ptr] = { item.node->right, item.depth + 1 };
+      }
+    }
+  }
+
+  const u32 tile_count_x = 8;
+  const u32 tile_count_y = 8;
 
   RenderData data[tile_count_x * tile_count_y];
 
@@ -1027,9 +1106,9 @@ int main(int argc, char **argv) {
       u64 end = get_performance_counter();
       float time = (float)((end - start) / (float)get_performance_frequency());
 
-      char *name = mprintf("image_%d_%d_%dx%d %.2fs", samps, max_bounces, width, height, time);
+      char name[256];
+      sprintf(name, "image_%d_%d_%dx%d %.2fs", samps, max_bounces, width, height, time);
       export_image(name, colors, width, height);
-      free(name);
       image_exported = true;
     }
 
