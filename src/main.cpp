@@ -474,7 +474,7 @@ bool aabb_intersection(const AABB &b, const Ray &r) {
   return true;
 }
 
-bool intersect_triangle(vec3 v0, vec3 v1, vec3 v2, const Ray &r, float *result_distance) {
+bool intersect_triangle(vec3 v0, vec3 v1, vec3 v2, const Ray &r, vec3 *bary_position) {
   static float Epsilon = std::numeric_limits<float>::epsilon();
 
   vec3 e1 = v1 - v0;
@@ -509,7 +509,7 @@ bool intersect_triangle(vec3 v0, vec3 v1, vec3 v2, const Ray &r, float *result_d
   float t = glm::dot(e2, q) * inv_det;
 
   if (t > Epsilon) {
-    *result_distance = t;
+    *bary_position = vec3(u, v, t);
     return true;
   }
 
@@ -526,8 +526,6 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
 
   float distance = FLT_MAX;
 
-  float result_distance;
-
   u32 index;
   for (u32 i = 0; i < model->mesh.indices_count; i += 3) {
     int indices_a = model->mesh.indices[i + 0] * 3;
@@ -538,10 +536,11 @@ void intersect_model(HitResult *result, Model *model, const Ray &r) {
     vec3 b = *(vec3 *)(model->mesh.vertices + indices_b);
     vec3 c = *(vec3 *)(model->mesh.vertices + indices_c);
 
-    if (intersect_triangle(a, b, c, r, &result_distance)) {
-      if (result_distance < distance) {
+    vec3 bary_position;
+    if (intersect_triangle(a, b, c, r, &bary_position)) {
+      if (bary_position.z < distance) {
         index = i;
-        distance = result_distance;
+        distance = bary_position.z;
         hit = true;
       }
     }
@@ -570,6 +569,9 @@ void bvh_intersect(BVHNode *root, Ray r, HitResult *result) {
   BVHNode *stack[512];
   stack[0] = root;
 
+  Triangle *final_triangle = NULL;
+  vec3 final_uv;
+
   while (stack_ptr >= 0) {
     BVHNode *node = stack[stack_ptr];
     stack_ptr -= 1;
@@ -578,13 +580,11 @@ void bvh_intersect(BVHNode *root, Ray r, HitResult *result) {
       for (u32 i = 0; i < node->count; i++) {
         Triangle *triangle = node->triangles + i;
         vec3 uv;
-        if (glm::intersectRayTriangle(r.origin, r.direction, triangle->positions[0], triangle->positions[1], triangle->positions[2], uv)) {
+        if (intersect_triangle(triangle->positions[0], triangle->positions[1], triangle->positions[2], r, &uv)) {
           if (uv.z < result->distance) {
+            final_uv = uv;
             result->distance = uv.z;
-
-            result->normal = glm::normalize((1 - uv.x - uv.y) * triangle->normals[0] + uv.x * triangle->normals[1] + uv.y * triangle->normals[2]);
-
-            result->material_index = triangle->material_index;
+            final_triangle = triangle;
           }
         }
       }
@@ -597,6 +597,12 @@ void bvh_intersect(BVHNode *root, Ray r, HitResult *result) {
         stack[++stack_ptr] = node->right;
       }
     }
+  }
+
+
+  if (final_triangle) {
+    result->normal = glm::normalize((1 - final_uv.x - final_uv.y) * final_triangle->normals[0] + final_uv.x * final_triangle->normals[1] + final_uv.y * final_triangle->normals[2]);
+    result->material_index = final_triangle->material_index;
   }
 }
 
