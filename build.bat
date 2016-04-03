@@ -2,7 +2,7 @@
 
 IF NOT EXIST build\win mkdir build\win
 
-set CommonFlags=-Oi -nologo /wd4312 /wd4577 /wd4530 /O2
+set CommonFlags=-Oi -nologo /wd4312 /wd4577 /wd4530 /O2 -fp:fast -fp:except- -Gm- -GR- -EHa- -Zo -Oi -FC -Z7
 
 set Libs=..\..\libs\windows\glew\lib\Release\x64\glew32s.lib opengl32.lib ..\..\libs\windows\assimp\lib64\assimp.lib
 set Includes=/I ..\..\libs\glm /I ..\..\libs\windows\glew\include /I ..\..\libs\assimp\include /I ..\..\libs\stb /I ..\..\libs\base /I ..\..\libs\windows\dirent
